@@ -861,6 +861,40 @@ async def get_invite_with_circle(invite_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+async def get_recent_recipients(telegram_id: int, limit: int = 3) -> list[str]:
+    """
+    Return up to `limit` most-recently-contacted DISTINCT recipient handle_display
+    values for the given sender.  Only outbound sends are considered.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        cursor = await db.execute(
+            "SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return []
+        user_id = row["id"]
+
+        # GROUP BY deduplicate; MAX(t.created_at) keeps ordering by the latest
+        # send to each recipient so the list feels most-recently-used.
+        cursor = await db.execute(
+            """
+            SELECT r.handle_display
+            FROM transactions t
+            JOIN users r ON r.id = t.recipient_id
+            WHERE t.sender_id = ?
+            GROUP BY t.recipient_id
+            ORDER BY MAX(t.created_at) DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [row["handle_display"] for row in rows]
+
+
 async def dissolve_circle(circle_id: int, creator_telegram_id: int) -> bool:
     """
     Mark a Community Circle as dissolved (dissolved=1).

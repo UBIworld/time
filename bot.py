@@ -163,6 +163,63 @@ def _send_confirm_keyboard() -> InlineKeyboardMarkup:
 
 
 # ---------------------------------------------------------------------------
+# Shared helper: pre-fill a handle and jump straight to time-entry step
+# Used by Feature 1 (Send Again), Feature 2 (Nudge), Feature 4 (Reply-to-Send)
+# ---------------------------------------------------------------------------
+
+async def _prefill_handle_and_go_to_time(
+    message_or_callback_msg,
+    state: FSMContext,
+    handle_display: str,
+    sender_tg_id: int,
+) -> None:
+    """
+    Store handle parts in FSM data and transition to waiting_hours.
+    `message_or_callback_msg` is the Message object to reply to.
+    Validates that the handle still exists and is not a self-send.
+    """
+    recipient = await db.get_user_by_handle(handle_display)
+    if not recipient:
+        await message_or_callback_msg.answer(
+            f"Handle {mono(handle_display)} no longer exists. "
+            "Use /send to pick a new recipient.",
+            parse_mode="Markdown",
+        )
+        await state.clear()
+        return
+
+    if recipient["telegram_id"] == sender_tg_id:
+        await message_or_callback_msg.answer(
+            "You cannot send time to yourself. Use /send to pick a different handle."
+        )
+        await state.clear()
+        return
+
+    # Split handle_display back into its three slots so the rest of the FSM
+    # (cb_send_confirm, send_blue, etc.) can reconstruct the full handle normally.
+    # Format is always  ::slot1:slot2:slot3::
+    inner = handle_display.strip(":").strip(":")  # drops leading/trailing ::
+    # Robust parse: strip the outer :: and split the inner part
+    stripped = handle_display[2:-2]  # removes leading '::' and trailing '::'
+    parts = stripped.split(":", 2)   # exactly 3 parts
+
+    await state.update_data(
+        sender_tg_id=sender_tg_id,
+        handle_part_1=parts[0],
+        handle_part_2=parts[1],
+        handle_part_3=parts[2],
+    )
+    await state.set_state(Send.waiting_hours)
+    await message_or_callback_msg.answer(
+        f"Sending to {mono(handle_display)}.\n\n"
+        "You will be prompted to enter 3 parts of the transaction amount "
+        "corresponding to HH:MM:SS\n"
+        "How many Hours?",
+        parse_mode="Markdown",
+    )
+
+
+# ---------------------------------------------------------------------------
 # /start — Registration
 # ---------------------------------------------------------------------------
 
@@ -481,6 +538,22 @@ def _is_cancel(text: str) -> bool:
 
 # --- Step 1: /send entry point ---
 
+def _recent_recipients_keyboard(handles: list[str]) -> InlineKeyboardMarkup:
+    """Build the contextual nudge keyboard: one button per recent recipient plus
+    a manual-entry escape hatch at the bottom."""
+    rows = []
+    for h in handles:
+        rows.append([InlineKeyboardButton(
+            text=h,
+            callback_data=f"send_recent:{h}",
+        )])
+    rows.append([InlineKeyboardButton(
+        text="Enter handle",
+        callback_data="send_recent_manual",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @router.message(Command("send"), StateFilter("*"))
 async def cmd_send(message: Message, state: FSMContext):
     await state.clear()
@@ -490,12 +563,54 @@ async def cmd_send(message: Message, state: FSMContext):
         return
 
     await state.update_data(sender_tg_id=sender["telegram_id"])
+
+    # Feature 2 — Contextual Nudge: show recent recipients if any exist
+    recent = await db.get_recent_recipients(message.from_user.id, limit=3)
+    if recent:
+        await message.answer(
+            "Who do you want to send time to?\n"
+            "Pick a recent recipient or enter a handle manually:",
+            reply_markup=_recent_recipients_keyboard(recent),
+        )
+        await state.set_state(Send.waiting_handle_part1)
+        # State stays at waiting_handle_part1 so the normal text path still works
+        # if the user ignores the keyboard and types directly.
+        return
+
+    # No history — go straight to handle entry as before
     await message.answer(
         "You will be prompted to enter 3 parts of the recipient handle "
         "::1:2:3::\n"
         "What's the 1st part of the recipient?"
     )
     await state.set_state(Send.waiting_handle_part1)
+
+
+# --- Feature 2 callbacks: recent-recipient buttons on /send nudge ---
+
+@router.callback_query(Send.waiting_handle_part1, F.data.startswith("send_recent:"))
+async def cb_send_recent_pick(callback: CallbackQuery, state: FSMContext):
+    """User tapped a recent-recipient button — jump straight to time entry."""
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    handle_display = callback.data[len("send_recent:"):]
+    data = await state.get_data()
+    sender_tg_id = data.get("sender_tg_id", callback.from_user.id)
+    await _prefill_handle_and_go_to_time(callback.message, state, handle_display, sender_tg_id)
+
+
+@router.callback_query(Send.waiting_handle_part1, F.data == "send_recent_manual")
+async def cb_send_recent_manual(callback: CallbackQuery, state: FSMContext):
+    """User tapped 'Enter handle' — fall through to the normal 3-part handle flow."""
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        "You will be prompted to enter 3 parts of the recipient handle "
+        "::1:2:3::\n"
+        "What's the 1st part of the recipient?"
+    )
+    # State remains waiting_handle_part1 — text handler takes over from here
 
 
 # --- Step 1 handler: handle part 1 ---
@@ -813,8 +928,18 @@ async def cb_send_restart_blue(callback: CallbackQuery, state: FSMContext):
 
 
 # ---------------------------------------------------------------------------
-# /history — Transaction history
+# /history — Transaction history  (Feature 1: per-entry "Send again" buttons)
 # ---------------------------------------------------------------------------
+
+def _send_again_keyboard(recipient_handle: str) -> InlineKeyboardMarkup:
+    """Inline keyboard attached to each outbound history entry."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="Send again",
+            callback_data=f"history_send_again:{recipient_handle}",
+        )
+    ]])
+
 
 @router.message(Command("history"), StateFilter("*"))
 async def cmd_history(message: Message, state: FSMContext):
@@ -832,7 +957,10 @@ async def cmd_history(message: Message, state: FSMContext):
         await message.answer("No transactions yet. Use /send to transfer time to someone!")
         return
 
-    lines = [f"Transaction History (last {len(transactions)})\n{'=' * 35}"]
+    await message.answer(
+        f"Transaction History (last {len(transactions)})\n{'=' * 35}"
+    )
+
     for tx in transactions:
         is_sender = tx["sender_tg_id"] == message.from_user.id
         direction = "SENT" if is_sender else "RECEIVED"
@@ -847,12 +975,44 @@ async def cmd_history(message: Message, state: FSMContext):
         else:
             feedback = f"🟦{blue}%/🟥{red}%"
 
-        lines.append(
+        entry_text = (
             f"  {direction} {format_time(tx['amount'])} {arrow} {mono(other_raw)} "
             f"({feedback}) [{tx['created_at'][:16]}]"
         )
 
-    await message.answer("\n".join(lines), parse_mode="Markdown")
+        # Only outbound sends get the "Send again" button — inbound receipts
+        # would send back to the original sender, which may not be the intent.
+        if is_sender:
+            await message.answer(
+                entry_text,
+                parse_mode="Markdown",
+                reply_markup=_send_again_keyboard(other_raw),
+            )
+        else:
+            await message.answer(entry_text, parse_mode="Markdown")
+
+
+# --- Feature 1 callback: "Send again" button from history ---
+
+@router.callback_query(F.data.startswith("history_send_again:"))
+async def cb_history_send_again(callback: CallbackQuery, state: FSMContext):
+    """Pre-fill the recipient from a history entry and jump to time-entry."""
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    handle_display = callback.data[len("history_send_again:"):]
+
+    # Clear any stale FSM state before starting a fresh send flow
+    await state.clear()
+
+    sender = await db.get_user(callback.from_user.id)
+    if not sender:
+        await callback.message.answer("You're not registered yet. Type /start to begin.")
+        return
+
+    await _prefill_handle_and_go_to_time(
+        callback.message, state, handle_display, sender["telegram_id"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1560,6 +1720,60 @@ async def cmd_reboot(message: Message, state: FSMContext):
     # os.execv replaces the current process image in-place.
     # The new process inherits the same PID, env, and open FDs — clean restart.
     os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+# ---------------------------------------------------------------------------
+# Feature 4 — Reply-to-Send: reply to a bot confirmation → pre-fill /send
+# ---------------------------------------------------------------------------
+
+# Matches handles in any bot message: ::word:word:word::
+# Slots can contain anything except a colon, so [^:]+ covers emoji and mixed text.
+_HANDLE_RE = re.compile(r'::[^:]+:[^:]+:[^:]+::')
+
+
+@router.message(F.reply_to_message, StateFilter(None))
+async def handle_reply_to_bot_message(message: Message, state: FSMContext):
+    """
+    If a user replies to a message sent by this bot that contains a UBI handle,
+    extract the handle and launch the send FSM at the time-entry step —
+    skipping the 3-part handle input entirely.
+
+    Only fires when there is no active FSM state, so it never interrupts an
+    ongoing /send flow.
+    """
+    # Confirm the replied-to message is from this bot
+    replied = message.reply_to_message
+    if not replied or not replied.from_user or not replied.from_user.is_bot:
+        return
+    if replied.from_user.id != bot.id:
+        return
+
+    # Check that the sender is registered
+    sender = await db.get_user(message.from_user.id)
+    if not sender:
+        return  # silent ignore — they can /start separately
+
+    # Try to find a handle in the replied-to message text
+    text_to_search = replied.text or replied.caption or ""
+    match = _HANDLE_RE.search(text_to_search)
+    if not match:
+        return
+
+    handle_display = match.group(0)
+
+    # Validate the handle still exists in the DB
+    recipient = await db.get_user_by_handle(handle_display)
+    if not recipient:
+        return  # handle may have been deleted — silent ignore
+
+    # Block self-sends before launching the FSM
+    if recipient["telegram_id"] == sender["telegram_id"]:
+        await message.answer("You cannot send time to yourself.")
+        return
+
+    await _prefill_handle_and_go_to_time(
+        message, state, handle_display, sender["telegram_id"]
+    )
 
 
 # ---------------------------------------------------------------------------
