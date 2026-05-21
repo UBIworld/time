@@ -36,6 +36,20 @@ ADMIN_TELEGRAM_ID = int(os.environ["ADMIN_TELEGRAM_ID"])
 # Database
 DB_PATH = "ubi_bot.db"
 
+# Federation — local node domain (user-facing, e.g. "cat.ubi.asia").
+# This is the domain that gets appended after the `@` when a handle from this
+# node is rendered to a remote node, and the value populated into
+# users.node_domain at registration time.
+#
+# Default is "localhost" so dev/test environments work out of the box. In
+# production set LOCAL_NODE_DOMAIN in the systemd EnvironmentFile (the live
+# bot at cat.ubi.asia sets this to "cat.ubi.asia").
+#
+# Federation transport (HTTP+JSON+Ed25519 vs. Avalanche, etc.) is NOT decided
+# yet — this value only controls handle rendering and the local schema fields
+# and is architecture-agnostic.
+LOCAL_NODE_DOMAIN = os.environ.get("LOCAL_NODE_DOMAIN", "localhost")
+
 # Time constants (seconds)
 DAILY_WALLET_AMOUNT = 86400    # 24h = 86,400 seconds
 VAULT_CAPACITY_TIER1 = 86400  # 24h for Tier 1

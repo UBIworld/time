@@ -40,7 +40,28 @@ from wallet import (
     build_handle,
     time_until_midnight_utc,
     parse_time_input,
+    format_federated_handle,
 )
+
+
+def display_handle(user: dict) -> str:
+    """
+    Render a user row's handle for any user-facing message.
+
+    Local users (the only kind that currently exist) get the bare form
+    ("house:cat:888") — visibly identical to today. Remote / cached users
+    get the federated form ("house:cat:888@tie.ubi.asia") so the recipient
+    can tell at a glance the handle isn't on this node.
+
+    `user` is the dict returned by db.get_user / db.get_user_by_handle /
+    similar. Tolerates rows that pre-date the federation columns (treats
+    them as local).
+    """
+    return format_federated_handle(
+        user["handle_display"],
+        user.get("node_domain"),
+        config.LOCAL_NODE_DOMAIN,
+    )
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -229,7 +250,7 @@ async def cmd_start(message: Message, state: FSMContext):
     user = await db.get_user(message.from_user.id)
     if user:
         await message.answer(
-            f"Welcome back, {user['handle_display']}!\n\n"
+            f"Welcome back, {display_handle(user)}!\n\n"
             f"Your handle is active. Use /help to see all commands.",
             reply_markup=MAIN_KEYBOARD,
         )
@@ -374,7 +395,7 @@ async def reg_confirm(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         f"You're in! Welcome to the time economy.\n\n"
-        f"Handle: {mono(user['handle_display'])}\n"
+        f"Handle: {mono(display_handle(user))}\n"
         f"Daily Wallet: {format_time(user['daily_wallet'])}\n"
         f"Time Vault: {format_time(user['time_vault'])}\n\n"
         f"You have 24 hours to give. The clock is ticking.\n"
@@ -403,7 +424,7 @@ async def cmd_balance(message: Message, state: FSMContext):
         f"  🔄 Daily Wallet:  {format_time(user['daily_wallet'])}\n"
         f"  #️⃣ Time Vault:    {format_time(user['time_vault'])}  "
         f"(Tier {user['vault_tier']}, cap {format_time(user['vault_capacity'])})\n"
-        f"  Handle: {mono(user['handle_display'])}\n"
+        f"  Handle: {mono(display_handle(user))}\n"
         f"  ⏰ Next reset in: {format_time(countdown)}",
         parse_mode="Markdown",
     )
@@ -507,7 +528,7 @@ async def _do_transfer(message: Message, sender: dict, recipient: dict, amount: 
         )
 
     await message.answer(
-        f"📤 Sent! {format_time(amount)} to {mono(recipient['handle_display'])} ({feedback})\n"
+        f"📤 Sent! {format_time(amount)} to {mono(display_handle(recipient))} ({feedback})\n"
         f"Source: {source_desc}\n\n"
         f"Your remaining balance:\n"
         f"  Wallet: {format_time(result['sender_wallet_remaining'])}\n"
@@ -520,7 +541,7 @@ async def _do_transfer(message: Message, sender: dict, recipient: dict, amount: 
         await bot.send_message(
             chat_id=recipient["telegram_id"],
             text=(
-                f"🎁 You received {format_time(amount)} from {mono(sender['handle_display'])} ({feedback})\n\n"
+                f"🎁 You received {format_time(amount)} from {mono(display_handle(sender))} ({feedback})\n\n"
                 f"Your Time Vault: {format_time(result['recipient_vault_new'])}"
                 f"{overflow_note}"
             ),
@@ -964,7 +985,16 @@ async def cmd_history(message: Message, state: FSMContext):
     for tx in transactions:
         is_sender = tx["sender_tg_id"] == message.from_user.id
         direction = "SENT" if is_sender else "RECEIVED"
-        other_raw = tx["recipient_handle"] if is_sender else tx["sender_handle"]
+        # Federation-aware: append @node_domain to the counterparty handle
+        # when they're on a remote node. Local counterparties render bare.
+        other_bare = tx["recipient_handle"] if is_sender else tx["sender_handle"]
+        other_domain = (
+            tx.get("recipient_node_domain") if is_sender
+            else tx.get("sender_node_domain")
+        )
+        other_raw = format_federated_handle(
+            other_bare, other_domain, config.LOCAL_NODE_DOMAIN
+        )
         arrow = "->" if is_sender else "<-"
         blue = tx["blue_pct"]
         red = 100 - blue
@@ -1062,7 +1092,7 @@ async def cmd_handle(message: Message, state: FSMContext):
         return
 
     await message.answer(
-        f"Your Handle:\n\n  {mono(user['handle_display'])}\n\n"
+        f"Your Handle:\n\n  {mono(display_handle(user))}\n\n"
         f"Others can send you time using this handle.",
         parse_mode="Markdown",
     )
@@ -1309,7 +1339,12 @@ async def invite_handle_input(message: Message, state: FSMContext):
         await message.answer("You can't invite yourself to your own circle. Try a different handle:")
         return
 
-    await state.update_data(invitee_tg_id=invitee["telegram_id"], invitee_handle=invitee["handle_display"])
+    # Store the federation-aware rendering so downstream messages
+    # display @domain for remote invitees once federation is live.
+    await state.update_data(
+        invitee_tg_id=invitee["telegram_id"],
+        invitee_handle=display_handle(invitee),
+    )
 
     data = await state.get_data()
     creator_circles = data["creator_circles"]
@@ -1322,7 +1357,7 @@ async def invite_handle_input(message: Message, state: FSMContext):
     else:
         # Multiple circles — ask which one
         await message.answer(
-            f"Which circle do you want to invite {mono(invitee['handle_display'])} to?",
+            f"Which circle do you want to invite {mono(display_handle(invitee))} to?",
             parse_mode="Markdown",
             reply_markup=_circles_select_keyboard(creator_circles, "invite"),
         )
@@ -1374,7 +1409,7 @@ async def _send_invite(message: Message, state: FSMContext):
             chat_id=invitee_tg_id,
             text=(
                 f"🤗 {circle_name} — you've been invited to join!\n"
-                f"Invited by: {mono(sender['handle_display'])}"
+                f"Invited by: {mono(display_handle(sender))}"
             ),
             parse_mode="Markdown",
             reply_markup=_invite_join_keyboard(invite["id"]),

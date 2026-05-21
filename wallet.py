@@ -202,9 +202,95 @@ def parse_handle(text: str) -> tuple[str, str, str] | None:
     return None
 
 
+def parse_qualified_handle(text: str) -> dict | None:
+    """
+    Federation-aware handle parser.
+
+    Accepts both:
+      - "house:cat:888"                  (local form, no domain)
+      - "house:cat:888@cat.ubi.asia"     (federated form)
+
+    Returns a dict on success:
+        {
+            "slot1": str, "slot2": str, "slot3": str,
+            "domain": str | None,        # None means "caller's local node"
+            "is_local": bool,            # True iff no @domain was present
+            "handle_bare": str,          # "slot1:slot2:slot3"
+            "handle_full": str,          # bare, with @domain appended iff present
+        }
+    Or None if the input doesn't parse.
+
+    Notes:
+      - `is_local` here is a *syntactic* signal — it means "the caller didn't
+        specify a domain", not "the user definitely lives on this node". The
+        DB lookup is still authoritative. But for routing logic in transport
+        code, this distinction is what we branch on.
+      - Domain validation is loose intentionally — DNS rules are looser than
+        most regexes, and tightening here just creates false negatives. We
+        accept anything non-empty that has no whitespace or `:`.
+    """
+    if text is None:
+        return None
+    text = text.strip()
+    if not text:
+        return None
+
+    domain: str | None = None
+    if "@" in text:
+        bare, _, dom = text.partition("@")
+        dom = dom.strip()
+        if not dom or ":" in dom or any(c.isspace() for c in dom):
+            return None
+        domain = dom
+        text = bare
+
+    parts = text.split(":")
+    if len(parts) != 3:
+        return None
+    if not all(p and ("@" not in p) and (not any(c.isspace() for c in p)) for p in parts):
+        return None
+
+    slot1, slot2, slot3 = parts
+    handle_bare = f"{slot1}:{slot2}:{slot3}"
+    handle_full = handle_bare if domain is None else f"{handle_bare}@{domain}"
+    return {
+        "slot1": slot1,
+        "slot2": slot2,
+        "slot3": slot3,
+        "domain": domain,
+        "is_local": domain is None,
+        "handle_bare": handle_bare,
+        "handle_full": handle_full,
+    }
+
+
 def build_handle(slot1: str, slot2: str, slot3: str) -> str:
     """Build handle display string from three slots (local form, no domain)."""
     return f"{slot1}:{slot2}:{slot3}"
+
+
+def format_federated_handle(
+    handle_bare: str,
+    user_node_domain: str | None,
+    local_node_domain: str,
+) -> str:
+    """
+    Render a handle for display, appending `@node_domain` only when the user
+    is NOT on the local node.
+
+    Args:
+      handle_bare:        "slot1:slot2:slot3" (no domain, no delimiters)
+      user_node_domain:   the user's node_domain column from the DB; may be
+                          None for legacy rows that haven't been backfilled
+      local_node_domain:  config.LOCAL_NODE_DOMAIN
+
+    Returns the display string. Local users (or unknown / NULL node_domain,
+    which we treat as local for back-compat) get the bare handle. Remote
+    users get the suffixed form.
+    """
+    if not user_node_domain or user_node_domain == local_node_domain:
+        return handle_bare
+    return f"{handle_bare}@{user_node_domain}"
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,12 @@ All time values stored as integers (seconds). No floats, no rounding.
 """
 
 import aiosqlite
-from config import DB_PATH, DAILY_WALLET_AMOUNT, VAULT_CAPACITY_TIER1
+from config import (
+    DB_PATH,
+    DAILY_WALLET_AMOUNT,
+    VAULT_CAPACITY_TIER1,
+    LOCAL_NODE_DOMAIN,
+)
 from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
@@ -51,7 +56,9 @@ async def init_db():
                 vault_tier      INTEGER NOT NULL DEFAULT 1,
                 vault_capacity  INTEGER NOT NULL DEFAULT 86400,
                 created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-                last_reset_at   TEXT NOT NULL DEFAULT (datetime('now'))
+                last_reset_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                node_domain     TEXT,
+                is_local        INTEGER NOT NULL DEFAULT 1
             )
         """)
 
@@ -59,6 +66,94 @@ async def init_db():
             CREATE UNIQUE INDEX IF NOT EXISTS idx_handle_slots
             ON users(handle_slot1, handle_slot2, handle_slot3)
         """)
+
+        # -----------------------------------------------------------------------
+        # Federation schema (stage 1, architecture-agnostic)
+        #
+        # If this DB pre-dates federation, the users table won't have the
+        # `node_domain` / `is_local` columns from the CREATE TABLE above (the
+        # IF NOT EXISTS skipped it). Add them with ALTER TABLE — idempotent
+        # because we check PRAGMA table_info first.
+        #
+        # The authoritative migration of *existing rows* (populating
+        # node_domain for already-registered users) lives in
+        # migrations/002_federation_schema.py. This block just makes sure
+        # the columns exist so newly-created bots / fresh installs work.
+        # -----------------------------------------------------------------------
+        cursor = await db.execute("PRAGMA table_info(users)")
+        user_cols = {row[1] for row in await cursor.fetchall()}
+        if "node_domain" not in user_cols:
+            await db.execute("ALTER TABLE users ADD COLUMN node_domain TEXT")
+        if "is_local" not in user_cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN is_local INTEGER NOT NULL DEFAULT 1"
+            )
+
+        # Backfill node_domain for any user row where it's still NULL — this
+        # keeps the column populated for fresh installs and any rows that
+        # slipped past 002. Uses the configured LOCAL_NODE_DOMAIN.
+        await db.execute(
+            "UPDATE users SET node_domain = ? WHERE node_domain IS NULL",
+            (LOCAL_NODE_DOMAIN,),
+        )
+
+        # Known federation peers. `public_key` and `metadata` are kept nullable
+        # / open so we can pin Ed25519 keys (HTTP+JSON transport) or Avalanche
+        # subnet/chain identifiers without a schema change once Stefano picks
+        # the transport layer.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS peer_nodes (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain          TEXT UNIQUE NOT NULL,
+                discovered_at   INTEGER NOT NULL,
+                last_seen_at    INTEGER,
+                status          TEXT NOT NULL DEFAULT 'active'
+                                    CHECK (status IN ('active', 'defederated', 'unknown')),
+                public_key      TEXT,
+                metadata        TEXT
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_peer_nodes_domain ON peer_nodes(domain)"
+        )
+
+        # Cross-node transfers. Kept distinct from the local `transactions`
+        # table because federated transfers may be pending/reverted/failed
+        # whereas local transfers are atomic and final the moment they hit
+        # the DB.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS federated_transactions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_user_id   INTEGER NOT NULL REFERENCES users(id),
+                remote_handle   TEXT NOT NULL,
+                direction       TEXT NOT NULL
+                                    CHECK (direction IN ('out', 'in')),
+                amount_seconds  INTEGER NOT NULL
+                                    CHECK (amount_seconds > 0),
+                blue_pct        INTEGER NOT NULL DEFAULT 100,
+                created_at      INTEGER NOT NULL,
+                confirmed_at    INTEGER,
+                reverted_at     INTEGER,
+                status          TEXT NOT NULL DEFAULT 'pending'
+                                    CHECK (status IN ('pending', 'confirmed', 'failed', 'reverted')),
+                transport       TEXT NOT NULL,
+                external_id     TEXT,
+                idempotency_key TEXT UNIQUE,
+                metadata        TEXT
+            )
+        """)
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_fed_tx_idempotency "
+            "ON federated_transactions(idempotency_key)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fed_tx_local_user "
+            "ON federated_transactions(local_user_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fed_tx_status "
+            "ON federated_transactions(status)"
+        )
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
@@ -240,15 +335,20 @@ async def create_user(
     slot2: str,
     slot3: str,
 ) -> dict:
-    """Register a new user. Returns the new user dict."""
+    """Register a new user. Returns the new user dict.
+
+    New rows are always created with the local node's domain and
+    `is_local = 1`. Remote (cached) user rows are inserted by federation
+    code via a different code path once the transport layer is built.
+    """
     handle_display = f"{slot1}:{slot2}:{slot3}"
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             INSERT INTO users (telegram_id, username, handle_slot1, handle_slot2,
                                handle_slot3, handle_display, daily_wallet, time_vault,
-                               vault_tier, vault_capacity)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?)
+                               vault_tier, vault_capacity, node_domain, is_local)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, 1)
             """,
             (
                 telegram_id,
@@ -259,6 +359,7 @@ async def create_user(
                 handle_display,
                 DAILY_WALLET_AMOUNT,
                 VAULT_CAPACITY_TIER1,
+                LOCAL_NODE_DOMAIN,
             ),
         )
         await db.commit()
@@ -394,11 +495,17 @@ async def get_transaction_history(telegram_id: int, limit: int = 10) -> list[dic
             return []
         user_id = row["id"]
 
+        # node_domain is also selected so callers can render the counterparty
+        # with @domain when it's a remote user (Stage 1 federation groundwork).
         cursor = await db.execute(
             """
             SELECT t.*,
-                   s.handle_display as sender_handle, s.telegram_id as sender_tg_id,
-                   r.handle_display as recipient_handle, r.telegram_id as recipient_tg_id
+                   s.handle_display as sender_handle,
+                   s.telegram_id    as sender_tg_id,
+                   s.node_domain    as sender_node_domain,
+                   r.handle_display as recipient_handle,
+                   r.telegram_id    as recipient_tg_id,
+                   r.node_domain    as recipient_node_domain
             FROM transactions t
             JOIN users s ON t.sender_id = s.id
             JOIN users r ON t.recipient_id = r.id
