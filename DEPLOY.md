@@ -222,15 +222,23 @@ systemd handles restart-on-crash (`Restart=on-failure`) and restart-on-reboot
 ```bash
 cd ~/ubi-bot
 sudo systemctl stop ubi-bot
+cp ubi_bot.db ubi_bot.db.bak-$(date -u +%Y%m%dT%H%M%SZ)   # always back up first
 git pull
 .venv/bin/pip install -r requirements.txt
+
+# Run any one-shot migrations from migrations/ — dry-run first, then for real.
+# Example (only needed once, on upgrades that drop the `::` handle wrappers):
+.venv/bin/python migrations/001_drop_handle_delimiters.py --dry-run
+.venv/bin/python migrations/001_drop_handle_delimiters.py
+
 sudo systemctl start ubi-bot
 sudo journalctl -u ubi-bot -n 50 --no-pager
 ```
 
-If a release adds a database migration, the bot's startup will apply it
-automatically. The schema is forward-only; back up `ubi_bot.db` before
-upgrading if you want a fast rollback option.
+Migrations under `migrations/` are idempotent — safe to re-run, no-op if
+already applied. The bot's own startup also applies internal schema
+additions automatically. The schema is forward-only; the `.bak` snapshot
+above is your fast rollback option.
 
 ---
 
@@ -410,8 +418,14 @@ captured in `dump.pm2`. That dump is what survives a reboot.
 ```bash
 cd ~/apps/ubi-bot
 pm2 stop ubi-bot
+cp ubi_bot.db ubi_bot.db.bak-$(date -u +%Y%m%dT%H%M%SZ)   # always back up first
 git pull
 .venv/bin/pip install -r requirements.txt
+
+# Run any one-shot migrations from migrations/ — dry-run first, then for real.
+.venv/bin/python migrations/001_drop_handle_delimiters.py --dry-run
+.venv/bin/python migrations/001_drop_handle_delimiters.py
+
 pm2 start ubi-bot
 pm2 logs ubi-bot --lines 50 --nostream
 ```
@@ -487,6 +501,23 @@ and vice versa. Time cannot be sent across nodes.
 Each node is internally complete — Daily Wallet, Time Vault, Universal
 Circles, daily reset — but those state machines do not synchronise with
 other nodes' state.
+
+### Handle format (forward-compatible with federation)
+
+Handles look like `slot:slot:slot` — three colon-separated slots, with no
+wrapping delimiters. Example: `house:cat:888`. The parser also accepts an
+optional `@node.domain` suffix (e.g. `house:cat:888@cat.ubi.asia`) for the
+day federation lands. Today the suffix is ignored on local-only nodes; it
+exists in the parser so user-visible handles don't have to change when
+cross-node transfers ship.
+
+If you're upgrading an existing node from the older `::slot:slot:slot::`
+form, run `migrations/001_drop_handle_delimiters.py` once during the
+deploy cycle. It's idempotent (safe to re-run) and transactional (rolls
+back on any error). See **Step A.8 / B.11** for where it slots into your
+update workflow.
+
+### Roadmap
 
 Cross-node time transfer (and a shared notion of identity / handle
 uniqueness across nodes) is on the roadmap, not in the code. When it lands,

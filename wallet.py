@@ -183,21 +183,28 @@ def parse_blue_pct(text: str) -> int | None:
 
 def parse_handle(text: str) -> tuple[str, str, str] | None:
     """
-    Parse a full handle string: ::slot1:slot2:slot3::
+    Parse a full handle string: slot1:slot2:slot3
+    Optionally followed by @domain (federated form, returned domain is discarded
+    here — callers that need it should use parse_qualified_handle).
     Returns (slot1, slot2, slot3) or None if invalid format.
+
+    Slot contents cannot contain ':' or '@' or whitespace. Empty slots reject.
     """
     text = text.strip()
-    if text.startswith("::") and text.endswith("::") and len(text) > 4:
-        inner = text[2:-2]  # strip leading :: and trailing ::
-        parts = inner.split(":")
-        if len(parts) == 3 and all(p for p in parts):
-            return parts[0], parts[1], parts[2]
+    if not text:
+        return None
+    # Strip optional federated suffix
+    if "@" in text:
+        text = text.split("@", 1)[0]
+    parts = text.split(":")
+    if len(parts) == 3 and all(p and ("@" not in p) and (not any(c.isspace() for c in p)) for p in parts):
+        return parts[0], parts[1], parts[2]
     return None
 
 
 def build_handle(slot1: str, slot2: str, slot3: str) -> str:
-    """Build handle display string from three slots."""
-    return f"::{slot1}:{slot2}:{slot3}::"
+    """Build handle display string from three slots (local form, no domain)."""
+    return f"{slot1}:{slot2}:{slot3}"
 
 
 # ---------------------------------------------------------------------------
@@ -248,8 +255,12 @@ def parse_send_command(text: str) -> dict | None:
         recipient = "@" + at_match.group(1)
         rest = at_match.group(2)
     else:
-        # Try to match handle format ::slot1:slot2:slot3::
-        handle_match = re.match(r'(::(?:[^:]+):(?:[^:]+):(?:[^:]+)::)\s+(.*)', text)
+        # Try to match handle format slot1:slot2:slot3 with optional @domain
+        # (federation parsing only — federated send isn't implemented yet).
+        handle_match = re.match(
+            r'((?:[^:\s@]+):(?:[^:\s@]+):(?:[^:\s@]+)(?:@[a-zA-Z0-9.-]+)?)\s+(.*)',
+            text,
+        )
         if handle_match:
             recipient = handle_match.group(1)
             rest = handle_match.group(2)

@@ -197,11 +197,11 @@ async def _prefill_handle_and_go_to_time(
 
     # Split handle_display back into its three slots so the rest of the FSM
     # (cb_send_confirm, send_blue, etc.) can reconstruct the full handle normally.
-    # Format is always  ::slot1:slot2:slot3::
-    inner = handle_display.strip(":").strip(":")  # drops leading/trailing ::
-    # Robust parse: strip the outer :: and split the inner part
-    stripped = handle_display[2:-2]  # removes leading '::' and trailing '::'
-    parts = stripped.split(":", 2)   # exactly 3 parts
+    # Format is always  slot1:slot2:slot3  (post-2026-05-21 — no :: delimiters).
+    # We strip an optional @domain suffix in case a federated handle ever
+    # arrives here through the recent-recipient path.
+    bare = handle_display.split("@", 1)[0]
+    parts = bare.split(":", 2)   # exactly 3 parts
 
     await state.update_data(
         sender_tg_id=sender_tg_id,
@@ -238,7 +238,7 @@ async def cmd_start(message: Message, state: FSMContext):
     await message.answer(
         "Welcome to UBI.World!\n\n"
         "Let's create your Handle. Your identity in the time economy.\n"
-        "Format: ::slot1:slot2:slot3::\n\n"
+        "Format: slot1:slot2:slot3\n\n"
         "You'll choose 3 slots — any word, number, or phrase you like.\n\n"
         "Enter your FIRST slot (e.g., house, moon, pizza):"
     )
@@ -580,7 +580,7 @@ async def cmd_send(message: Message, state: FSMContext):
     # No history — go straight to handle entry as before
     await message.answer(
         "You will be prompted to enter 3 parts of the recipient handle "
-        "::1:2:3::\n"
+        "(format: slot1:slot2:slot3)\n"
         "What's the 1st part of the recipient?"
     )
     await state.set_state(Send.waiting_handle_part1)
@@ -607,7 +607,7 @@ async def cb_send_recent_manual(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
         "You will be prompted to enter 3 parts of the recipient handle "
-        "::1:2:3::\n"
+        "(format: slot1:slot2:slot3)\n"
         "What's the 1st part of the recipient?"
     )
     # State remains waiting_handle_part1 — text handler takes over from here
@@ -680,7 +680,7 @@ async def cb_handle_yes(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(
             "Handle not found. Let's try again.\n\n"
             "You will be prompted to enter 3 parts of the recipient handle "
-            "::1:2:3::\n"
+            "(format: slot1:slot2:slot3)\n"
             "What's the 1st part of the recipient?"
         )
         await state.update_data(handle_part_1=None, handle_part_2=None, handle_part_3=None)
@@ -693,7 +693,7 @@ async def cb_handle_yes(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(
             "You cannot send time to yourself. Let's try a different handle.\n\n"
             "You will be prompted to enter 3 parts of the recipient handle "
-            "::1:2:3::\n"
+            "(format: slot1:slot2:slot3)\n"
             "What's the 1st part of the recipient?"
         )
         await state.update_data(handle_part_1=None, handle_part_2=None, handle_part_3=None)
@@ -716,7 +716,7 @@ async def cb_handle_restart(callback: CallbackQuery, state: FSMContext):
     await state.update_data(handle_part_1=None, handle_part_2=None, handle_part_3=None)
     await callback.message.answer(
         "You will be prompted to enter 3 parts of the recipient handle "
-        "::1:2:3::\n"
+        "(format: slot1:slot2:slot3)\n"
         "What's the 1st part of the recipient?"
     )
     await state.set_state(Send.waiting_handle_part1)
@@ -1100,7 +1100,7 @@ async def cmd_help(message: Message, state: FSMContext):
         "- Every transfer carries a 🟦  Blue Time  /  🟥  Red Time  satisfaction signal\n\n"
         "Time format: enter Hours, Minutes, and Seconds separately when prompted\n"
         "🟦 Blue Time: default 100%. Enter 0-100 when prompted\n"
-        "Handle format: ::word:word:word:: (e.g., ::cat:chef:888::)"
+        "Handle format: word:word:word (e.g., cat:chef:888)"
     )
 
 
@@ -1283,7 +1283,7 @@ async def cmd_invite(message: Message, state: FSMContext):
 
     await message.answer(
         "Who would you like to invite? Enter their UBI handle\n"
-        "(format: ::slot1:slot2:slot3::)\n\n"
+        "(format: slot1:slot2:slot3)\n\n"
         "Type /cancel to abort."
     )
     await state.set_state(InviteToCircle.waiting_for_handle)
@@ -1301,7 +1301,7 @@ async def invite_handle_input(message: Message, state: FSMContext):
     if not invitee:
         await message.answer(
             "Handle not found. Please enter a valid UBI handle:\n"
-            "(format: ::slot1:slot2:slot3::)"
+            "(format: slot1:slot2:slot3)"
         )
         return
 
@@ -1726,9 +1726,15 @@ async def cmd_reboot(message: Message, state: FSMContext):
 # Feature 4 — Reply-to-Send: reply to a bot confirmation → pre-fill /send
 # ---------------------------------------------------------------------------
 
-# Matches handles in any bot message: ::word:word:word::
-# Slots can contain anything except a colon, so [^:]+ covers emoji and mixed text.
-_HANDLE_RE = re.compile(r'::[^:]+:[^:]+:[^:]+::')
+# Matches handles in any bot message: slot:slot:slot   (optionally @domain).
+# Slot contents exclude ':', whitespace, and '@'. We anchor on a non-handle
+# boundary (start-of-string or non-slot char) so things like a stray
+# "24:00:00" in a time string aren't picked up — slot tokens in bot output
+# are always wrapped in backticks (`mono(handle)`), so we anchor on backtick
+# or whitespace boundaries to keep the match precise.
+_HANDLE_RE = re.compile(
+    r'(?:^|[\s`])((?:[^\s:@`]+):(?:[^\s:@`]+):(?:[^\s:@`]+)(?:@[a-zA-Z0-9.-]+)?)(?=[\s`,.!?]|$)'
+)
 
 
 @router.message(F.reply_to_message, StateFilter(None))
@@ -1759,7 +1765,11 @@ async def handle_reply_to_bot_message(message: Message, state: FSMContext):
     if not match:
         return
 
-    handle_display = match.group(0)
+    # group(1) is the handle proper; group(0) may include a leading boundary char.
+    handle_display = match.group(1)
+    # Strip federated @domain suffix if present — V1 of this feature only
+    # supports local recipients (federation isn't implemented yet).
+    handle_display = handle_display.split("@", 1)[0]
 
     # Validate the handle still exists in the DB
     recipient = await db.get_user_by_handle(handle_display)

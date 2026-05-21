@@ -15,19 +15,19 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 
 RESERVED_HANDLES: frozenset[str] = frozenset({
-    "::❤️:❤️:❤️::",  # ❤️  Health
-    "::\U0001f34e:\U0001f34e:\U0001f34e::",         # 🍎  Food
-    "::\U0001f3e0:\U0001f3e0:\U0001f3e0::",         # 🏠  Home
-    "::\U0001f33f:\U0001f33f:\U0001f33f::",         # 🌿  Nature
-    "::\U0001f4d6:\U0001f4d6:\U0001f4d6::",         # 📖  Learn
+    "❤️:❤️:❤️",  # ❤️  Health
+    "\U0001f34e:\U0001f34e:\U0001f34e",         # 🍎  Food
+    "\U0001f3e0:\U0001f3e0:\U0001f3e0",         # 🏠  Home
+    "\U0001f33f:\U0001f33f:\U0001f33f",         # 🌿  Nature
+    "\U0001f4d6:\U0001f4d6:\U0001f4d6",         # 📖  Learn
     # AI Cats team members — server-side identities, never available to real users
-    "::pedro:pedro:pedro::",
-    "::bella:bella:bella::",
-    "::milo:milo:milo::",
-    "::tiramisu:tiramisu:tiramisu::",
-    "::oscar:oscar:oscar::",
-    "::siam:siam:siam::",
-    "::raffaello:raffaello:raffaello::",
+    "pedro:pedro:pedro",
+    "bella:bella:bella",
+    "milo:milo:milo",
+    "tiramisu:tiramisu:tiramisu",
+    "oscar:oscar:oscar",
+    "siam:siam:siam",
+    "raffaello:raffaello:raffaello",
 })
 
 
@@ -241,7 +241,7 @@ async def create_user(
     slot3: str,
 ) -> dict:
     """Register a new user. Returns the new user dict."""
-    handle_display = f"::{slot1}:{slot2}:{slot3}::"
+    handle_display = f"{slot1}:{slot2}:{slot3}"
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
