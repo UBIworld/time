@@ -50,6 +50,37 @@ DB_PATH = "ubi_bot.db"
 # and is architecture-agnostic.
 LOCAL_NODE_DOMAIN = os.environ.get("LOCAL_NODE_DOMAIN", "localhost")
 
+# Federation (stage 2a) — where to persist this node's Ed25519 keypair.
+#
+# Defaults to ~/.ubi-bot/ so keys live OUTSIDE the repo (and outside any
+# git-tracked path) by default. Operators on shared hosting where $HOME
+# isn't writable from the bot process can override to any directory the
+# bot can read+write — typically alongside .env.
+#
+# The directory will be created mode 700 on first run if it doesn't
+# exist; the private key file inside it is created mode 600.
+NODE_KEY_DIR = os.path.expanduser(
+    os.environ.get("NODE_KEY_DIR", "~/.ubi-bot")
+)
+
+# Federation HTTP server port. The bot embeds an aiohttp app alongside
+# aiogram's long-polling loop to serve `/.well-known/ubi-node` (and in
+# stage 2b, the signed transfer endpoints). Defaults to 8765.
+# Operators behind a reverse proxy / shared-hosting panel must route their
+# public 443/80 to this port — see DEPLOY.md "Federation: cryptographic
+# identity & discovery".
+FEDERATION_HTTP_PORT = int(os.environ.get("FEDERATION_HTTP_PORT", "8765"))
+
+# Federation HTTP bind address. Default 0.0.0.0 lets a reverse proxy on
+# another host reach the listener. Operators who run nginx/Caddy on the
+# same machine and want the federation listener loopback-only can set
+# this to 127.0.0.1.
+FEDERATION_HTTP_HOST = os.environ.get("FEDERATION_HTTP_HOST", "0.0.0.0")
+
+# Federation spec version published in `/.well-known/ubi-node`. Bump on
+# incompatible wire-format changes.
+FEDERATION_SPEC_VERSION = "ubi-fed-1.0"
+
 # Time constants (seconds)
 DAILY_WALLET_AMOUNT = 86400    # 24h = 86,400 seconds
 VAULT_CAPACITY_TIER1 = 86400  # 24h for Tier 1

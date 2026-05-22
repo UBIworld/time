@@ -31,8 +31,11 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+import aiosqlite
+
 import config
 import database as db
+import federation
 from database import RESERVED_HANDLES
 from wallet import (
     format_time,
@@ -1742,6 +1745,211 @@ async def cb_dissolve_circle_cancel(callback: CallbackQuery, state: FSMContext):
 
 
 # ---------------------------------------------------------------------------
+# Federation — Stage 2a admin commands (admin only)
+#
+# These commands are the operator-facing surface of the discovery layer.
+# They wrap the plain functions in federation.py so stage 2b code can reuse
+# the same helpers from anywhere (e.g. an outbound transfer needing peer
+# resolution).
+#
+# All four commands silently no-op for anyone other than ADMIN_TELEGRAM_ID
+# (same posture as /reboot — federation plumbing is operator-only until
+# the UX work in stage 3).
+# ---------------------------------------------------------------------------
+
+# Module-level cache populated in main() so commands can echo this node's
+# identity without re-reading the key files on every invocation.
+_NODE_IDENTITY: dict | None = None
+
+
+def _is_admin(message: Message) -> bool:
+    return message.from_user.id == config.ADMIN_TELEGRAM_ID
+
+
+@router.message(Command("federation_identity"), StateFilter("*"))
+async def cmd_federation_identity(message: Message, state: FSMContext):
+    """
+    Print this node's federation identity in a copy-pasteable block.
+
+    Operators share this with peer operators so the peers can /peer_add
+    against the right public key. The block intentionally formats as plain
+    text (not a code fence with shell prompts) so it pastes cleanly into
+    chat or email.
+    """
+    await state.clear()
+    if not _is_admin(message):
+        return
+
+    if _NODE_IDENTITY is None:
+        await message.answer(
+            "Federation identity not loaded yet. The bot may still be "
+            "starting up — try again in a moment, or check the logs."
+        )
+        return
+
+    await message.answer(
+        "Federation identity for this node:\n\n"
+        f"node_domain:     {config.LOCAL_NODE_DOMAIN}\n"
+        f"public_key_b64:  {_NODE_IDENTITY['public_key_b64']}\n"
+        f"fingerprint:     {_NODE_IDENTITY['fingerprint']}\n"
+        f"spec_version:    {config.FEDERATION_SPEC_VERSION}\n"
+        f"well_known_url:  https://{config.LOCAL_NODE_DOMAIN}/.well-known/ubi-node\n\n"
+        "Share these lines with a peer operator. They run "
+        f"`/peer_add {config.LOCAL_NODE_DOMAIN}` from their bot to register "
+        "you."
+    )
+
+
+@router.message(Command("peer_add"), StateFilter("*"))
+async def cmd_peer_add(message: Message, state: FSMContext):
+    """
+    /peer_add <domain> — fetch the peer's well-known doc, validate, and
+    upsert into peer_nodes. Idempotent: re-running on a known domain
+    refreshes public_key + metadata in place (no duplicate row).
+
+    Stage 2a does NOT verify any signature against the peer's key — it
+    just trusts the doc on first fetch (TOFU). Stage 2b will add proper
+    verification when the signed transfer protocol lands.
+    """
+    await state.clear()
+    if not _is_admin(message):
+        return
+
+    # Parse the argument off the command. aiogram doesn't auto-split args,
+    # so pull the rest of the message text after the command keyword.
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer(
+            "Usage: /peer_add <domain>\n"
+            "Example: /peer_add tie.ubi.asia"
+        )
+        return
+    raw_domain = parts[1].strip()
+    canonical = federation._canonical_domain(raw_domain)
+
+    await message.answer(f"Fetching https://{canonical}/.well-known/ubi-node ...")
+
+    try:
+        doc = await federation.discover_peer(canonical)
+    except Exception as exc:
+        await message.answer(
+            f"Failed to discover {canonical}: {type(exc).__name__}: {exc}"
+        )
+        return
+
+    # The doc's self-declared node_domain SHOULD match what we typed. If
+    # it doesn't, surface a warning but proceed — operators can still add
+    # a peer that's behind a CDN domain that rewrites the name.
+    declared_domain = doc.get("node_domain", "")
+    warning = ""
+    if declared_domain and declared_domain.lower() != canonical:
+        warning = (
+            f"\n[!] Peer's well-known declares node_domain={declared_domain!r} "
+            f"but we fetched it from {canonical!r}. Stored under the fetched "
+            f"domain; verify with the operator before relying on transfers."
+        )
+
+    try:
+        async with aiosqlite.connect(config.DB_PATH) as conn:
+            row = await federation.upsert_peer_node(
+                conn,
+                domain=canonical,
+                public_key_b64=doc["node_public_key"],
+                well_known_doc=doc,
+            )
+            await conn.commit()
+    except Exception as exc:
+        await message.answer(
+            f"Discovered {canonical} but DB upsert failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return
+
+    fingerprint = federation._public_key_fingerprint(
+        __import__("base64").b64decode(doc["node_public_key"])
+    )
+    await message.answer(
+        f"Peer added: {canonical}\n"
+        f"  status:      {row['status']}\n"
+        f"  fingerprint: {fingerprint}\n"
+        f"  spec:        {doc.get('spec_version')}\n"
+        f"  software:    {doc.get('software', {}).get('name', '?')} "
+        f"{doc.get('software', {}).get('version', '?')}"
+        f"{warning}"
+    )
+
+
+@router.message(Command("peer_list"), StateFilter("*"))
+async def cmd_peer_list(message: Message, state: FSMContext):
+    """List every row in peer_nodes — active, defederated, and unknown."""
+    await state.clear()
+    if not _is_admin(message):
+        return
+
+    async with aiosqlite.connect(config.DB_PATH) as conn:
+        peers = await federation.list_peer_nodes(conn)
+
+    if not peers:
+        await message.answer(
+            "No peers registered yet. Use /peer_add <domain> to add one."
+        )
+        return
+
+    lines = [f"Known peer nodes ({len(peers)}):", ""]
+    for p in peers:
+        fp = "?"
+        if p["public_key"]:
+            try:
+                fp = federation._public_key_fingerprint(
+                    __import__("base64").b64decode(p["public_key"])
+                )
+            except Exception:
+                fp = "(invalid)"
+        from datetime import datetime, timezone as _tz
+        discovered = datetime.fromtimestamp(
+            p["discovered_at"], tz=_tz.utc
+        ).strftime("%Y-%m-%d %H:%M UTC")
+        lines.append(
+            f"- {p['domain']}\n"
+            f"    status:      {p['status']}\n"
+            f"    fingerprint: {fp}\n"
+            f"    discovered:  {discovered}"
+        )
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("peer_remove"), StateFilter("*"))
+async def cmd_peer_remove(message: Message, state: FSMContext):
+    """
+    /peer_remove <domain> — mark the peer as defederated (does NOT delete
+    the row; preserves history for audit). Re-add with /peer_add to
+    reactivate.
+    """
+    await state.clear()
+    if not _is_admin(message):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer("Usage: /peer_remove <domain>")
+        return
+    raw_domain = parts[1].strip()
+    canonical = federation._canonical_domain(raw_domain)
+
+    async with aiosqlite.connect(config.DB_PATH) as conn:
+        ok = await federation.soft_remove_peer_node(conn, canonical)
+        await conn.commit()
+
+    if ok:
+        await message.answer(
+            f"Peer {canonical} marked defederated. Row preserved; re-add "
+            f"with /peer_add {canonical}."
+        )
+    else:
+        await message.answer(f"No peer named {canonical} in the DB.")
+
+
+# ---------------------------------------------------------------------------
 # /reboot — Hidden admin command: in-place process restart (admin only)
 # ---------------------------------------------------------------------------
 
@@ -1880,11 +2088,66 @@ async def daily_reset_job():
 # ---------------------------------------------------------------------------
 
 async def main():
-    # Initialize database
+    """
+    Main entry point.
+
+    Stage 2a restructure note: the bot is now a TWO-task process —
+    aiogram's long-polling loop AND an aiohttp HTTP server (federation
+    discovery endpoint), sharing one event loop. Both run as tasks of
+    asyncio.gather(). When either exits (clean shutdown of polling, or
+    HTTP server crash), we tear down the other and the scheduler.
+
+    This is the same pattern stage 2b will extend by adding the signed
+    transfer endpoints to the existing aiohttp app — no further restructure
+    needed at that point.
+    """
+    global _NODE_IDENTITY
+
+    # 1. Database first — every other startup step may write to it.
     await db.init_db()
     logger.info("Database initialized.")
 
-    # Set up the daily reset scheduler
+    # 2. Federation identity: generate-or-load the Ed25519 keypair.
+    #    Idempotent — if keys exist, this is a fast read.
+    try:
+        _NODE_IDENTITY = federation.load_or_create_keypair()
+    except Exception as exc:
+        logger.error(
+            "Failed to load/create federation keypair: %s: %s",
+            type(exc).__name__, exc,
+            exc_info=True,
+        )
+        raise
+
+    if _NODE_IDENTITY["generated"]:
+        logger.info(
+            "Federation keypair generated. fingerprint=%s key_dir=%s",
+            _NODE_IDENTITY["fingerprint"],
+            _NODE_IDENTITY["key_dir"],
+        )
+        logger.info(
+            "Private key (mode 600): %s",
+            _NODE_IDENTITY["private_key_path"],
+        )
+        logger.info(
+            "Public key (shareable): %s",
+            _NODE_IDENTITY["public_key_path"],
+        )
+    else:
+        logger.info(
+            "Federation keypair loaded from disk. fingerprint=%s key_dir=%s",
+            _NODE_IDENTITY["fingerprint"],
+            _NODE_IDENTITY["key_dir"],
+        )
+
+    # 3. Build the well-known doc once at startup. Keys + domain + spec
+    #    are stable for the lifetime of this process.
+    well_known_doc = federation.build_well_known_doc(
+        public_key_b64=_NODE_IDENTITY["public_key_b64"],
+        node_domain=config.LOCAL_NODE_DOMAIN,
+    )
+
+    # 4. Daily-reset scheduler — unchanged from pre-federation.
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         daily_reset_job,
@@ -1896,13 +2159,48 @@ async def main():
     scheduler.start()
     logger.info("Scheduler started. Daily reset scheduled for midnight UTC.")
 
-    # Start polling
+    # 5. Federation HTTP server — coexists with aiogram polling on the same
+    #    event loop. The runner returned here is what we tear down on
+    #    shutdown.
+    http_runner = None
+    try:
+        http_runner = await federation.run_http_server(well_known_doc)
+    except OSError as exc:
+        # Port already in use (or permission denied for low ports) is the
+        # most common failure mode here. Log loudly but DON'T crash the
+        # bot — federation discovery is degraded; Telegram polling is
+        # still useful for the operator. Stage 2b will need this server
+        # to be load-bearing, but stage 2a tolerates its absence.
+        logger.error(
+            "Federation HTTP server failed to bind on %s:%d: %s. "
+            "Bot will continue WITHOUT discovery endpoint. "
+            "Fix FEDERATION_HTTP_HOST / FEDERATION_HTTP_PORT and restart.",
+            config.FEDERATION_HTTP_HOST,
+            config.FEDERATION_HTTP_PORT,
+            exc,
+        )
+
+    # 6. Start polling. The polling call blocks until the bot stops.
     logger.info("Bot starting in polling mode...")
     try:
         await dp.start_polling(bot, skip_updates=True)
     finally:
-        scheduler.shutdown(wait=False)
-        await bot.session.close()
+        # Tear down everything in reverse-start order, swallowing errors so
+        # one failure doesn't mask another.
+        if http_runner is not None:
+            try:
+                await http_runner.cleanup()
+                logger.info("Federation HTTP server shut down.")
+            except Exception as exc:
+                logger.warning("HTTP server cleanup raised: %s", exc)
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception as exc:
+            logger.warning("Scheduler shutdown raised: %s", exc)
+        try:
+            await bot.session.close()
+        except Exception as exc:
+            logger.warning("Bot session close raised: %s", exc)
 
 
 if __name__ == "__main__":

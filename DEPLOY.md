@@ -491,6 +491,191 @@ external addressing.
 
 ---
 
+## Federation: cryptographic identity & discovery (stage 2a)
+
+> **Status:** This section describes the stage 2a federation plumbing
+> shipped on branch `feat/federation-v1`. Stage 2a gives each node a
+> stable cryptographic identity and a WebFinger-style discovery
+> endpoint so two nodes can find each other. **It does not yet
+> transfer Time across nodes** — that's stage 2b. Until 2b lands,
+> federation is "off by default" in the sense that no cross-node
+> transfer can be initiated; but you can already publish your identity
+> and exchange public keys with other operators in preparation.
+
+### What stage 2a adds
+
+1. **A per-node Ed25519 keypair**, generated on first boot.
+2. **A `/.well-known/ubi-node` JSON document** served by an embedded
+   aiohttp HTTP server (alongside aiogram's polling loop, same Python
+   process, same event loop).
+3. **Admin Telegram commands** to manage your peer list:
+   - `/federation_identity` — prints your node's public key + domain in
+     a copy-pasteable format. Share this with peer operators.
+   - `/peer_add <domain>` — fetches `<domain>/.well-known/ubi-node`,
+     validates it, and stores the peer (with its public key) in your
+     `peer_nodes` table.
+   - `/peer_list` — lists every peer you know about.
+   - `/peer_remove <domain>` — marks a peer defederated (preserves the
+     row in the DB for audit history).
+
+All four commands are restricted to `ADMIN_TELEGRAM_ID`.
+
+### Where the keys live
+
+The Ed25519 keypair is persisted to **`NODE_KEY_DIR`** (default
+`~/.ubi-bot/`). Two files are written:
+
+| File | Permissions | Contents |
+|---|---|---|
+| `node_private_key.pem` | `0600` (owner read/write only) | the raw 32-byte Ed25519 seed, base64-wrapped in a PEM envelope. **Treat like `BOT_TOKEN`. Never share, never commit.** |
+| `node_public_key.pem` | `0644` (world-readable) | the raw 32-byte public key, base64-wrapped in a PEM envelope. Safe to share. |
+
+The directory itself is created mode `0700` on first boot.
+
+If you lose `node_private_key.pem`, generate a new pair (delete both
+files and restart the bot — the next startup creates fresh keys). You
+then must re-share your new public key with every peer who federates
+with you.
+
+To inspect your public key without restarting the bot, either `cat
+~/.ubi-bot/node_public_key.pem` or run `/federation_identity` from
+your admin Telegram chat.
+
+### New environment variables
+
+Add these to your `.env` (all optional with sensible defaults):
+
+```ini
+# Federation (stage 2a)
+NODE_KEY_DIR=/home/youruser/.ubi-bot   # default: ~/.ubi-bot
+FEDERATION_HTTP_PORT=8765              # default: 8765
+FEDERATION_HTTP_HOST=0.0.0.0           # default: 0.0.0.0
+```
+
+`LOCAL_NODE_DOMAIN` (from stage 1) is also relevant — its value goes
+into the `node_domain` field of your published well-known doc and into
+the user-facing `@domain` suffix on federated handles. Set it to your
+real public hostname before sharing your identity with peers.
+
+### Exposing the federation port
+
+The bot now opens an **inbound** HTTP listener on
+`FEDERATION_HTTP_HOST:FEDERATION_HTTP_PORT` (default `0.0.0.0:8765`).
+Peer nodes must be able to reach it over HTTPS at
+`https://<LOCAL_NODE_DOMAIN>/.well-known/ubi-node`. This is the
+architecturally significant change from pre-federation deploys, which
+were pure outbound.
+
+How you route public 443 → 8765 depends on your hosting:
+
+**Path A — VPS with root (Caddy or nginx as reverse proxy):**
+
+The simplest setup is Caddy with auto-TLS. Four lines of `Caddyfile`:
+
+```caddyfile
+your.node.domain {
+    reverse_proxy 127.0.0.1:8765
+}
+```
+
+Then `apt install caddy && systemctl enable --now caddy`. Caddy obtains
+a Let's Encrypt cert automatically and forwards every request (in
+particular `/.well-known/ubi-node`) to the bot.
+
+If you already run nginx, the equivalent is:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name your.node.domain;
+    # ... your TLS certs ...
+    location / {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+Lock the bot to loopback by setting `FEDERATION_HTTP_HOST=127.0.0.1` in
+`.env` so nothing else on the machine can reach it directly.
+
+**Path B — Shared cPanel / SPanel hosting (Scalahosting et al.):**
+
+This is the rough edge. Shared hosting often doesn't let you bind
+arbitrary ports to the public internet. Two options, in order of
+preference:
+
+1. **Use the panel's "Application" / "Node.js / Python app" feature**
+   to attach `your.node.domain` (or a subdomain) to the bot's port via
+   the panel's built-in reverse proxy. Most modern panels have this —
+   look for "Application Manager", "Proxy Rules", or "Subdomain → Port
+   mapping". This is the path of least resistance and what most
+   shared-hosting operators end up doing.
+2. **Or run a Cloudflare Tunnel** (no inbound port needed at all —
+   the bot connects out to Cloudflare, which serves the public
+   endpoint). This is the easiest workaround if your panel doesn't
+   expose port forwarding. Install `cloudflared`, run
+   `cloudflared tunnel create ubi-fed`, point the tunnel at
+   `http://127.0.0.1:8765`, then point your domain's DNS at the
+   tunnel.
+
+If neither works (e.g. very restricted hosting), federation cannot run
+on that machine — you need a host with at least one routable inbound
+HTTP port. The bot will start regardless (Telegram polling still
+works), but other nodes won't be able to fetch your well-known doc.
+
+### Finding your own public key
+
+Three ways, pick whichever fits the moment:
+
+```bash
+# 1. From the file on disk:
+cat ~/.ubi-bot/node_public_key.pem
+
+# 2. From your bot, via Telegram:
+#    Run /federation_identity in your admin chat. The bot replies with
+#    a copy-pasteable block (domain + public key + fingerprint + URL).
+
+# 3. From the network (once your reverse proxy is up):
+curl -s https://<your-node-domain>/.well-known/ubi-node | jq .
+```
+
+The third form is what peer operators will actually use when adding
+you — so it's the canonical test that your deployment is reachable.
+
+### Adding a peer
+
+```
+You (in admin Telegram chat) — /peer_add tie.ubi.asia
+Bot                          — Fetching https://tie.ubi.asia/.well-known/ubi-node ...
+Bot                          — Peer added: tie.ubi.asia
+                                  status:      active
+                                  fingerprint: 374c:e53f:6a9c:bc15
+                                  spec:        ubi-fed-1.0
+                                  software:    ubi-bot stage-2a
+```
+
+The fingerprint is the first 16 hex chars of the peer's public key,
+formatted as `aaaa:bbbb:cccc:dddd`. Compare it to the value the peer
+operator shares with you over a separate channel (chat, email) to
+catch DNS hijacks and TLS-cert mishaps.
+
+To list peers: `/peer_list`. To remove (soft-delete, preserves
+history): `/peer_remove <domain>`.
+
+### What stage 2a does NOT do
+
+- No signature verification on inbound requests (every well-known
+  fetch is trust-on-first-use; stage 2b adds the signed transfer
+  protocol).
+- No actual cross-node Time transfer.
+- No outbound federated send commands (`/send slot:slot:slot@domain`
+  parses, but the federation transport is not wired).
+- No public node directory (V3+).
+
+---
+
 ## Federation status
 
 **As of May 2026, federation between nodes does not exist.** Each node

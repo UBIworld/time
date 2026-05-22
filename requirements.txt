@@ -3,3 +3,9 @@ aiosqlite>=0.19
 apscheduler>=3.10,<4.0
 python-dotenv>=1.0
 pytz>=2024.1
+# Federation (stage 2a): Ed25519 identity + WebFinger-style discovery.
+# aiohttp is the embedded HTTP server (already pulled transitively by
+# aiogram, but pinned here so it stays present if aiogram's deps shift).
+# pynacl is a thin, well-maintained libsodium binding for Ed25519.
+aiohttp>=3.9,<4.0
+pynacl>=1.5,<2.0
