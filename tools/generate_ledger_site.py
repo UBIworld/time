@@ -8,7 +8,10 @@ types one level up:
     {LEDGER_ROOT}/../index.html                   home dashboard
     {LEDGER_ROOT}/../tx/<id>.html                 one per transaction
     {LEDGER_ROOT}/../handle/<handle>.html         one per handle (urlencoded)
-    {LEDGER_ROOT}/../style.css                    design tokens (Tiramisu v2)
+    {LEDGER_ROOT}/../style.css                    design tokens (Tiramisu v3)
+    {LEDGER_ROOT}/index.html                      /ledger/ browse page
+    {LEDGER_ROOT}/transactions/index.html         /ledger/transactions/ browse page
+    {LEDGER_ROOT}/nodes/index.html                /ledger/nodes/ browse page
 
 Idempotent — running twice in a row produces identical bytes. Runs in
 under a second for the MVP-scale 9–100 transactions. Designed to be
@@ -147,15 +150,15 @@ def index_by_handle(txs: list[dict]) -> dict[str, list[dict]]:
 
 
 # --------------------------------------------------------------------------- #
-# Templates (Tiramisu v2 design system — warm cream / dark charcoal)
+# Templates (Tiramisu v3 — top-bar nav, Etherscan-style table, Blue/Red bar)
 # --------------------------------------------------------------------------- #
 
-# Inlined CSS. Borrowed directly from the existing /home/vrgli/ubi.world/
-# index.html (Tiramisu's deployed v2). Kept here so the ledger pages
-# render identically whether served as static files or previewed locally.
+# Inlined CSS. v3 layout from Tiramisu (top-bar pattern, responsive
+# table, Blue/Red horizontal bar). Mirrors the .css applied at
+# /home/vrgli/ubi.world/style.css on deploy.
 STYLE_CSS = r"""
-/* ubi.world ledger — book-family design system
-   Warm cream light / deep dark, Georgia serif body, system sans chrome */
+/* ubi.world ledger v3 — top-bar navigation, Etherscan-style responsive tables,
+   Blue/Red horizontal bar component. System fonts only. Dark by default. */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root{
@@ -169,11 +172,12 @@ STYLE_CSS = r"""
   --link:#d6c7a8;
   --link-hover:#ffffff;
   --code-bg:#22222a;
-  --side-bg:#101014;
-  --side-active-bg:#22222a;
-  --side-active-fg:#ffffff;
-  --side-active-bar:#d6c7a8;
   --row-hover:#1a1a20;
+  --row-alt:#191920;
+  --blue:#3e80c4;
+  --red:#c25a4a;
+  --bar-track:#22222a;
+  --bar-border:#3a3a42;
 }
 [data-theme="light"]{
   --bg:#f6f1e3;
@@ -186,11 +190,12 @@ STYLE_CSS = r"""
   --link:#5a4632;
   --link-hover:#1d1d1b;
   --code-bg:#ece5cf;
-  --side-bg:#efe8d3;
-  --side-active-bg:#e6dcc0;
-  --side-active-fg:#1d1d1b;
-  --side-active-bar:#5a4632;
   --row-hover:#ece4ca;
+  --row-alt:#f0e9d2;
+  --blue:#1e5a96;
+  --red:#9a3a2a;
+  --bar-track:#e6dcc0;
+  --bar-border:#bdb39a;
 }
 
 html{scroll-behavior:smooth}
@@ -204,107 +209,86 @@ body{
   min-height:100vh;
 }
 
-.site-chrome{
+/* TOP BAR */
+.topbar{
   position:sticky;top:0;z-index:50;background:var(--bg);
   border-bottom:1px solid var(--rule);
-  display:flex;align-items:center;justify-content:space-between;
-  padding:0.55rem 1rem;
+  display:flex;align-items:center;gap:1rem;
+  padding:0.55rem 1.2rem;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
 }
-.chrome-left{display:flex;align-items:center;gap:0.5rem}
-.chrome-brand{
+.topbar-left{display:flex;align-items:center;gap:0.7rem;flex:0 0 auto}
+.topbar-flag{display:inline-flex;align-items:center;gap:0.55rem;text-decoration:none;color:var(--fg);line-height:0}
+.topbar-flag img{height:24px;width:auto;border-radius:2px;opacity:0.95;display:block}
+.topbar-flag .brand{
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size:0.78rem;letter-spacing:0.14em;text-transform:uppercase;
+  font-weight:700;color:var(--muted);line-height:1;
+}
+.topbar-flag:hover .brand{color:var(--fg)}
+.topbar-title{
+  flex:1 1 auto;text-align:center;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size:0.82rem;letter-spacing:0.14em;text-transform:uppercase;
   color:var(--muted);font-weight:700;
 }
+.topbar-right{display:flex;align-items:center;gap:0.9rem;flex:0 0 auto}
+.topbar-eco{display:flex;align-items:center;gap:0.9rem;font-size:0.82rem}
+.topbar-eco a{color:var(--link);text-decoration:none;border-bottom:1px solid transparent}
+.topbar-eco a:hover{color:var(--link-hover);border-bottom-color:var(--link-hover)}
 .theme-toggle{
   background:transparent;border:1px solid var(--rule-strong);color:var(--fg);
   font:inherit;font-size:1.05rem;width:2.1rem;height:2.1rem;padding:0;
   border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
 }
 .theme-toggle:hover{border-color:var(--accent);color:var(--accent)}
+.theme-toggle .glyph{font-size:1.1rem;line-height:1}
 .menu-toggle{
   display:none;background:transparent;border:1px solid var(--rule-strong);
   color:var(--fg);font:inherit;font-size:0.85rem;padding:0.3rem 0.6rem;
   border-radius:4px;cursor:pointer;line-height:1;
 }
-
-.layout{
-  display:grid;grid-template-columns:240px minmax(0,1fr);
-  max-width:1180px;margin:0 auto;align-items:start;
-}
-.sidebar{
-  position:sticky;top:3.2rem;align-self:start;
-  max-height:calc(100vh - 3.2rem);overflow-y:auto;
-  padding:1.4rem 1rem 2.5rem 1.5rem;border-right:1px solid var(--rule);
-  background:var(--side-bg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  font-size:0.9rem;line-height:1.45;
-}
-.sidebar-header{
-  display:flex;align-items:center;justify-content:space-between;
-  margin:0 -0.5rem 1rem;padding:0 0.5rem 0.85rem;
-  border-bottom:1px solid var(--rule);
-}
-.sidebar-flag{
-  display:inline-flex;align-items:center;gap:0.5rem;
-  text-decoration:none;color:var(--fg);line-height:0;
-}
-.sidebar-flag img{height:22px;width:auto;border-radius:2px;opacity:0.95}
-.sidebar-flag .brand{
+.mobile-drawer{
+  display:none;position:fixed;top:3rem;left:0;right:0;
+  background:var(--bg);border-bottom:1px solid var(--rule);
+  padding:0.8rem 1rem;z-index:45;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size:0.78rem;letter-spacing:0.14em;text-transform:uppercase;
-  font-weight:700;color:var(--muted);line-height:1;
 }
-.sidebar-flag:hover .brand{color:var(--fg)}
-.side-part{
-  font-size:0.7rem;letter-spacing:0.14em;text-transform:uppercase;
-  color:var(--muted);font-weight:700;margin:1.1rem 0 0.35rem;
+.mobile-drawer.open{display:block}
+.mobile-drawer a{
+  display:block;padding:0.55rem 0.3rem;color:var(--link);
+  text-decoration:none;border-bottom:1px solid var(--rule);font-size:0.95rem;
 }
-.side-part:first-of-type{margin-top:0.2rem}
-.sidebar ul{list-style:none;margin:0 0 0.4rem;padding:0}
-.sidebar li{margin:0}
-.nav-link{
-  display:block;text-decoration:none;color:var(--link);
-  padding:0.34rem 0.55rem;margin:0.05rem -0.55rem;
-  border-left:3px solid transparent;border-radius:0 3px 3px 0;
-}
-.nav-link:hover{color:var(--link-hover);background:var(--bg-elev)}
-.sidebar .small-note{
-  margin-top:1rem;padding:0.7rem 0.8rem;background:var(--bg-elev);
-  border-radius:4px;font-size:0.82rem;color:var(--muted);line-height:1.5;
-}
-.sidebar .small-note strong{display:block;color:var(--fg);font-size:0.8rem;margin-bottom:0.3rem;text-transform:uppercase;letter-spacing:0.1em}
-.side-eco{margin-top:1.5rem;padding-top:0.9rem;border-top:1px solid var(--rule)}
+.mobile-drawer a:last-child{border-bottom:none}
 
-.wrap{max-width:880px;padding:2.8rem 2.2rem 4rem;margin:0}
+/* MAIN — full width, centered, generous max-width for tables */
+.wrap{max-width:1140px;margin:0 auto;padding:2.4rem 1.6rem 4rem}
+.wrap > p, .wrap > h1{max-width:70ch}
 
 .tagline{
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size:0.78rem;letter-spacing:0.14em;text-transform:uppercase;
-  color:var(--muted);font-weight:700;margin:0 0 1.2rem;
+  color:var(--muted);font-weight:700;margin:0 0 1.1rem;
 }
 h1{
   font-family: Georgia, serif;font-weight:700;font-size:2.1rem;color:var(--fg);
-  line-height:1.2;margin:0 0 1.2rem;letter-spacing:-0.01em;
+  line-height:1.2;margin:0 0 1.1rem;letter-spacing:-0.01em;
 }
 h2{
   font-family: Georgia, serif;font-weight:700;font-size:1.5rem;color:var(--fg);
-  margin:2.6rem 0 0.9rem;line-height:1.3;padding-bottom:0.4rem;
-  border-bottom:1px solid var(--rule);
+  margin:2.6rem 0 0.9rem;line-height:1.3;padding-bottom:0.4rem;border-bottom:1px solid var(--rule);
 }
-p{margin:0 0 1.05rem;max-width:65ch}
+p{margin:0 0 1.05rem}
 a{color:var(--link);text-decoration:none;border-bottom:1px solid transparent}
 a:hover{color:var(--link-hover);border-bottom-color:var(--link-hover)}
 strong{font-weight:700;color:var(--fg)}
-
 code, .mono{
   font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   font-size:0.88em;color:var(--accent);background:var(--code-bg);
   padding:0.1em 0.35em;border-radius:3px;border:1px solid var(--rule);
 }
 
-/* Stats grid (home) */
+/* Stats grid */
 .stats-grid{
   display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
   gap:0.9rem;margin:1.4rem 0 0.4rem;
@@ -328,28 +312,55 @@ code, .mono{
   font-size:0.78rem;color:var(--muted);margin-top:0.25rem;
 }
 
-/* Transactions table */
+/* ETHERSCAN-STYLE TX TABLE.
+   Desktop (>=700px): true table.
+   Mobile  (<700px):  each row becomes a stacked card; cells use data-label. */
+.tx-table-wrap{margin:1rem 0 1.4rem;}
 .tx-table{
-  width:100%;border-collapse:collapse;margin:1rem 0 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  width:100%;border-collapse:collapse;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size:0.9rem;
 }
 .tx-table th, .tx-table td{
-  text-align:left;padding:0.55rem 0.7rem;border-bottom:1px solid var(--rule);
-  vertical-align:top;
+  text-align:left;padding:0.6rem 0.75rem;border-bottom:1px solid var(--rule);
+  vertical-align:middle;
 }
 .tx-table th{
   font-size:0.72rem;letter-spacing:0.14em;text-transform:uppercase;
   color:var(--muted);font-weight:700;border-bottom:1px solid var(--rule-strong);
+  background:var(--bg-elev);
 }
-.tx-table tr:hover td{background:var(--row-hover)}
+.tx-table tbody tr:nth-child(even) td{background:var(--row-alt)}
+.tx-table tbody tr:hover td{background:var(--row-hover)}
 .tx-table td.amount{font-family: "SF Mono", Menlo, Consolas, monospace;color:var(--fg);white-space:nowrap}
-.tx-table td.time{font-family: "SF Mono", Menlo, Consolas, monospace;color:var(--muted);white-space:nowrap}
-.tx-table td.handle{font-family: "SF Mono", Menlo, Consolas, monospace}
-.blue-pill{
-  display:inline-block;padding:0.05em 0.55em;border:1px solid var(--rule-strong);
-  border-radius:999px;font-size:0.78em;color:var(--muted);background:var(--bg-elev);
+.tx-table td.time{font-family: "SF Mono", Menlo, Consolas, monospace;color:var(--muted);white-space:nowrap;font-size:0.85rem}
+.tx-table td.handle{font-family: "SF Mono", Menlo, Consolas, monospace;font-size:0.88rem}
+.tx-table td.node{font-family: "SF Mono", Menlo, Consolas, monospace;color:var(--muted);font-size:0.85rem;white-space:nowrap}
+
+/* BLUE / RED HORIZONTAL BAR — replaces the old circle/percentage pill.
+   <span class="br-bar" data-blue="80" aria-label="80% blue, 20% red">
+     <span class="br-fill br-blue" style="width:80%"></span>
+     <span class="br-fill br-red"  style="width:20%"></span>
+   </span>
+   <span class="br-num">80% blue</span>
+*/
+.br-cell{display:inline-flex;align-items:center;gap:0.5rem;white-space:nowrap}
+.br-bar{
+  display:inline-flex;width:80px;height:10px;
+  border:1px solid var(--bar-border);border-radius:5px;
+  background:var(--bar-track);overflow:hidden;flex:0 0 auto;
 }
+.br-fill{display:block;height:100%}
+.br-fill.br-blue{background:var(--blue)}
+.br-fill.br-red{background:var(--red)}
+.br-num{
+  font-family: "SF Mono", Menlo, Consolas, monospace;font-size:0.82rem;
+  color:var(--blue);font-weight:600;
+}
+.br-num.red-leaning{color:var(--red)}
+/* Larger variant for detail pages */
+.br-bar.br-bar-lg{width:160px;height:14px;border-radius:7px}
+.br-bar-lg + .br-num{font-size:1rem}
 
 /* Key/value list (tx detail) */
 .kv{
@@ -376,38 +387,83 @@ code, .mono{
   border-bottom:1px solid var(--rule-strong);
 }
 
+/* Crumbs (for /ledger/, /ledger/transactions/, /ledger/nodes/ subpages) */
+.crumbs{
+  font-family: "SF Mono", Menlo, Consolas, monospace;font-size:0.82rem;
+  color:var(--muted);margin-bottom:1.5rem;letter-spacing:0.04em;
+}
+.crumbs a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted)}
+.crumbs a:hover{color:var(--link-hover);border-bottom-color:var(--link-hover)}
+
+.notice{
+  background:var(--bg-elev);border:1px solid var(--rule);
+  border-left:3px solid var(--accent);border-radius:0 4px 4px 0;
+  padding:1.1rem 1.3rem;margin:1.5rem 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size:0.92rem;line-height:1.55;
+}
+.notice strong{color:var(--accent);display:block;font-size:0.74rem;
+  letter-spacing:0.14em;text-transform:uppercase;margin-bottom:0.5rem;}
+
 footer{
   border-top:1px solid var(--rule);padding:1.1rem 0 0;margin-top:3rem;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size:0.78rem;color:var(--muted);letter-spacing:0.05em;
 }
 
-@media (max-width:900px){
-  .layout{grid-template-columns:1fr}
+/* Mobile breakpoint — top bar collapses, tables become cards */
+@media (max-width:780px){
+  .topbar{padding:0.45rem 0.8rem;gap:0.5rem}
+  .topbar-title{display:none}
+  .topbar-eco{display:none}
   .menu-toggle{display:inline-block}
-  .sidebar{
-    position:fixed;top:3.2rem;left:0;bottom:0;width:280px;z-index:40;
-    transform:translateX(-100%);transition:transform 0.18s ease;
-    border-right:1px solid var(--rule);box-shadow:2px 0 12px rgba(0,0,0,0.18);
-  }
-  .sidebar.open{transform:translateX(0)}
-  body.sidebar-open{overflow:hidden}
-  .sidebar-scrim{
-    display:none;position:fixed;inset:3.2rem 0 0 0;
-    background:rgba(0,0,0,0.45);z-index:35;
-  }
-  body.sidebar-open .sidebar-scrim{display:block}
-}
-@media (max-width:700px){
   body{font-size:17px}
-  .wrap{padding:1.8rem 1.1rem 3rem}
+  .wrap{padding:1.6rem 1rem 3rem}
   h1{font-size:1.7rem}
   h2{font-size:1.25rem}
-  .site-chrome{padding:0.45rem 0.8rem}
-  .tx-table{font-size:0.84rem}
-  .tx-table th, .tx-table td{padding:0.45rem 0.45rem}
   .kv{grid-template-columns:1fr}
   .kv dt{padding-top:0.6rem}
+}
+
+/* Etherscan-style card layout for tables on mobile */
+@media (max-width:700px){
+  .tx-table{display:block;font-size:0.92rem}
+  .tx-table thead{display:none}
+  .tx-table tbody{display:block}
+  .tx-table tbody tr{
+    display:block;
+    background:var(--bg-elev);
+    border:1px solid var(--rule);
+    border-radius:5px;
+    margin-bottom:0.7rem;
+    padding:0.6rem 0.8rem;
+  }
+  .tx-table tbody tr:nth-child(even) td{background:transparent}
+  .tx-table tbody tr:hover td{background:transparent}
+  .tx-table tbody td{
+    display:flex;
+    align-items:flex-start;
+    gap:0.8rem;
+    padding:0.35rem 0;
+    border-bottom:1px dashed var(--rule);
+    white-space:normal;
+    word-break:break-word;
+  }
+  .tx-table tbody td:last-child{border-bottom:none}
+  .tx-table tbody td::before{
+    content: attr(data-label);
+    flex:0 0 6.5rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size:0.68rem;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+    font-weight:700;
+    padding-top:0.15rem;
+  }
+  .tx-table tbody td.time{font-size:0.84rem}
+  .br-bar{width:60px;height:9px}
+  .br-num{font-size:0.78rem}
 }
 """
 
@@ -423,57 +479,57 @@ CHROME_SCRIPT = """<script>
   applyTheme(currentTheme());
   var btn=document.getElementById('themeBtn');
   if(btn){btn.addEventListener('click',function(){var next=currentTheme()==='dark'?'light':'dark';try{localStorage.setItem('ubi-theme',next);}catch(e){}applyTheme(next);});}
-  var sb=document.querySelector('.sidebar');
   var mbtn=document.getElementById('menuBtn');
-  var scrim=document.querySelector('.sidebar-scrim');
-  function closeSb(){if(sb)sb.classList.remove('open');document.body.classList.remove('sidebar-open');if(mbtn)mbtn.setAttribute('aria-expanded','false');}
-  if(mbtn&&sb){mbtn.addEventListener('click',function(){var open=sb.classList.toggle('open');document.body.classList.toggle('sidebar-open',open);mbtn.setAttribute('aria-expanded',open?'true':'false');});}
-  if(scrim){scrim.addEventListener('click',closeSb);}
-  document.querySelectorAll('.sidebar a').forEach(function(a){a.addEventListener('click',function(){if(window.innerWidth<=900)closeSb();});});
+  var drawer=document.getElementById('mobileDrawer');
+  if(mbtn&&drawer){mbtn.addEventListener('click',function(){var open=drawer.classList.toggle('open');mbtn.setAttribute('aria-expanded',open?'true':'false');});}
   var sigToggle=document.getElementById('sigToggle');
   if(sigToggle){sigToggle.addEventListener('click',function(){var full=document.getElementById('sigFull');var trunc=document.getElementById('sigTrunc');var showing=full.style.display!=='none';full.style.display=showing?'none':'block';trunc.style.display=showing?'inline':'none';sigToggle.textContent=showing?'show full':'hide';});}
 })();
 </script>"""
 
 
-def _sidebar_html(active: str = "home") -> str:
-    """Build the shared sidebar. `active` controls which ecosystem link
-    gets the highlighted state."""
-    return f"""<nav class="sidebar" id="sidebar" aria-label="Site navigation">
-  <div class="sidebar-header">
-    <a class="sidebar-flag" href="/" aria-label="Time for UBI home">
+def _topbar_html(title_label: str) -> str:
+    """Sticky top bar — replaces the old left sidebar.
+
+    `title_label` is the small uppercase centred label (e.g. 'Public Ledger',
+    'Transaction', 'Handle'). The flag, ecosystem links, theme toggle and
+    mobile drawer are always present.
+    """
+    return f"""<header class="topbar" role="banner">
+  <div class="topbar-left">
+    <a class="topbar-flag" href="/" aria-label="Time for UBI home">
       <img src="https://ubi.vision/UBI-Flag/UBI-Flag-120x100px.png" alt="UBI flag" width="29" height="22">
       <span class="brand">Time for UBI</span>
     </a>
   </div>
-
-  <p class="side-part">What is this?</p>
-  <div class="small-note">
-    <strong>ubi.world</strong>
-    The public mirror of every Time for UBI transaction. Each entry is
-    signed by the node that recorded it. Anyone can audit.
+  <div class="topbar-title">{html.escape(title_label)}</div>
+  <div class="topbar-right">
+    <nav class="topbar-eco" aria-label="Ecosystem">
+      <a href="https://ubi.vision">Spec</a>
+      <a href="https://ubi.education">Book</a>
+      <a href="https://ubi.world">Ledger</a>
+    </nav>
+    <button class="theme-toggle" id="themeBtn" type="button" aria-label="Toggle dark or light mode" aria-pressed="true" title="Toggle dark / light"><span class="glyph" aria-hidden="true">&#9728;</span></button>
+    <button class="menu-toggle" id="menuBtn" type="button" aria-label="Open menu" aria-expanded="false">&#9776;</button>
   </div>
+</header>
 
-  <p class="side-part">Browse</p>
-  <ul>
-    <li><a href="/" class="nav-link">Latest transactions</a></li>
-    <li><a href="/ledger/" class="nav-link">Raw signed JSONs &rarr;</a></li>
-  </ul>
-
-  <div class="side-eco">
-    <p class="side-part">Ecosystem</p>
-    <ul>
-      <li><a href="https://ubi.vision" class="nav-link">Spec &rarr; ubi.vision</a></li>
-      <li><a href="https://ubi.education" class="nav-link">Book &rarr; ubi.education</a></li>
-      <li><a href="https://ubi.world" class="nav-link">Ledger &rarr; ubi.world</a></li>
-    </ul>
-  </div>
+<nav class="mobile-drawer" id="mobileDrawer" aria-label="Ecosystem (mobile)">
+  <a href="https://ubi.vision">Spec &rarr; ubi.vision</a>
+  <a href="https://ubi.education">Book &rarr; ubi.education</a>
+  <a href="https://ubi.world">Ledger &rarr; ubi.world</a>
+  <a href="/ledger/">Raw signed JSONs</a>
 </nav>
-<div class="sidebar-scrim" aria-hidden="true"></div>"""
+"""
 
 
-def _page_shell(title: str, body: str, active: str = "home") -> str:
-    """Wrap a page body in the shared chrome + sidebar."""
+# Kept for backwards-compat callers that referenced the old name — returns empty.
+def _sidebar_html(active: str = "home") -> str:
+    return ""
+
+
+def _page_shell(title: str, body: str, active: str = "home", topbar_label: str = "Public Ledger") -> str:
+    """Wrap a page body in the v3 top-bar shell."""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -486,23 +542,12 @@ def _page_shell(title: str, body: str, active: str = "home") -> str:
 </head>
 <body>
 
-<div class="site-chrome" role="banner">
-  <div class="chrome-left">
-    <button class="menu-toggle" id="menuBtn" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">&#9776; Menu</button>
-    <button class="theme-toggle" id="themeBtn" type="button" aria-label="Toggle dark or light mode" aria-pressed="true" title="Toggle dark / light"><span class="glyph" aria-hidden="true">&#9728;</span></button>
-  </div>
-  <span class="chrome-brand">Time for UBI &middot; Ledger</span>
-</div>
-
-<div class="layout">
-
-{_sidebar_html(active)}
+{_topbar_html(topbar_label)}
 
 <main class="wrap">
 {body}
 <footer>ubi.world &middot; public ledger &middot; signed by participating nodes &middot; generated {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}</footer>
 </main>
-</div>
 
 {CHROME_SCRIPT}
 </body>
@@ -515,21 +560,36 @@ def _page_shell(title: str, body: str, active: str = "home") -> str:
 # --------------------------------------------------------------------------- #
 
 def _tx_row(tx: dict) -> str:
+    """Emit one <tr> for the Etherscan-style transaction table.
+
+    Every <td> carries a data-label attribute so the mobile (<700px) CSS
+    can flip rows into stacked cards via ::before. The Blue/Red column
+    uses the br-cell + br-bar + br-num pattern (Tiramisu v3 patch).
+    """
     tx_id = tx["id"]
     ts = fmt_iso_human(tx.get("timestamp_iso", ""))
     frm = tx["from_handle"]
     to = tx["to_handle"]
     amount = fmt_short(tx["amount_seconds"])
     blue = tx.get("blue_pct", 100)
+    red = 100 - blue
     node = tx.get("from_node", "")
     return (
         f"<tr>"
-        f"<td class=\"time\">{html.escape(ts)}</td>"
-        f"<td class=\"handle\"><a href=\"/handle/{handle_url(frm)}.html\">{html.escape(frm)}</a></td>"
-        f"<td class=\"handle\"><a href=\"/handle/{handle_url(to)}.html\">{html.escape(to)}</a></td>"
-        f"<td class=\"amount\"><a href=\"/tx/{tx_id}.html\">{html.escape(amount)}</a></td>"
-        f"<td><span class=\"blue-pill\">blue {blue}%</span></td>"
-        f"<td class=\"handle\" style=\"color:var(--muted)\">{html.escape(node)}</td>"
+        f"<td class=\"time\" data-label=\"Time\">{html.escape(ts)}</td>"
+        f"<td class=\"handle\" data-label=\"From\"><a href=\"/handle/{handle_url(frm)}.html\">{html.escape(frm)}</a></td>"
+        f"<td class=\"handle\" data-label=\"To\"><a href=\"/handle/{handle_url(to)}.html\">{html.escape(to)}</a></td>"
+        f"<td class=\"amount\" data-label=\"Amount\"><a href=\"/tx/{tx_id}.html\">{html.escape(amount)}</a></td>"
+        f"<td data-label=\"Blue / Red\">"
+        f"<span class=\"br-cell\">"
+        f"<span class=\"br-bar\" aria-label=\"{blue}% blue, {red}% red\">"
+        f"<span class=\"br-fill br-blue\" style=\"width:{blue}%\"></span>"
+        f"<span class=\"br-fill br-red\" style=\"width:{red}%\"></span>"
+        f"</span>"
+        f"<span class=\"br-num\">{blue}% blue</span>"
+        f"</span>"
+        f"</td>"
+        f"<td class=\"node\" data-label=\"Node\">{html.escape(node)}</td>"
         f"</tr>"
     )
 
@@ -560,14 +620,16 @@ def build_home(txs: list[dict], handles: Iterable[str]) -> str:
 
     if latest:
         table_rows = "\n".join(_tx_row(t) for t in latest)
-        table = f"""<table class="tx-table">
+        table = f"""<div class="tx-table-wrap">
+<table class="tx-table">
 <thead>
-<tr><th>Time (UTC)</th><th>From</th><th>To</th><th>Amount</th><th>Blue</th><th>Node</th></tr>
+<tr><th>Time (UTC)</th><th>From</th><th>To</th><th>Amount</th><th>Blue / Red</th><th>Node</th></tr>
 </thead>
 <tbody>
 {table_rows}
 </tbody>
-</table>"""
+</table>
+</div>"""
     else:
         table = "<p style=\"color:var(--muted)\">No transactions yet. The ledger fills as nodes come online.</p>"
 
@@ -621,7 +683,7 @@ def build_home(txs: list[dict], handles: Iterable[str]) -> str:
   the long-form rationale in the book at <a href="https://ubi.education">ubi.education</a>.
 </p>
 """
-    return _page_shell("ubi.world — public ledger of Time for UBI", body, active="home")
+    return _page_shell("ubi.world — public ledger of Time for UBI", body, active="home", topbar_label="Public Ledger")
 
 
 def build_tx_detail(tx: dict) -> str:
@@ -638,6 +700,15 @@ def build_tx_detail(tx: dict) -> str:
     body = f"""<p class="tagline">Transaction &middot; {html.escape(tx_id)}</p>
 <h1>{html.escape(amount)} &mdash; {html.escape(frm)} <span style="color:var(--muted)">&rarr;</span> {html.escape(to)}</h1>
 <p style="color:var(--muted)">{html.escape(ts)} &middot; signed by <code>{html.escape(tx.get("signing_node_domain", ""))}</code></p>
+
+<h2>Blue / Red signal</h2>
+<div style="display:flex;align-items:center;gap:0.9rem;margin:0.6rem 0 1.6rem">
+  <span class="br-bar br-bar-lg" aria-label="{blue}% blue, {red}% red">
+    <span class="br-fill br-blue" style="width:{blue}%"></span>
+    <span class="br-fill br-red"  style="width:{red}%"></span>
+  </span>
+  <span class="br-num">{blue}% blue &middot; {red}% red</span>
+</div>
 
 <h2>Receipt</h2>
 <dl class="kv">
@@ -668,7 +739,7 @@ def build_tx_detail(tx: dict) -> str:
   Raw signed JSON: <a href="/ledger/transactions/{html.escape(tx_id)}.json">/ledger/transactions/{html.escape(tx_id)}.json</a>
 </p>
 """
-    return _page_shell(f"{tx_id} — ubi.world", body, active="tx")
+    return _page_shell(f"{tx_id} — ubi.world", body, active="tx", topbar_label="Transaction")
 
 
 def build_handle_detail(handle: str, txs_for_handle: list[dict]) -> str:
@@ -684,19 +755,35 @@ def build_handle_detail(handle: str, txs_for_handle: list[dict]) -> str:
     # own rating).
     rated = sent  # sender's transactions carry the rating recipient gave
     if rated:
-        avg_blue = sum(t.get("blue_pct", 100) for t in rated) / len(rated)
-        blue_label = f"{avg_blue:.0f}% blue / {100 - avg_blue:.0f}% red"
+        avg_blue_int = round(sum(t.get("blue_pct", 100) for t in rated) / len(rated))
     else:
-        blue_label = "n/a"
+        avg_blue_int = 0
+    avg_red_int = 100 - avg_blue_int
+    has_rating = bool(rated)
 
     def tx_table(rows: list[dict], empty_msg: str) -> str:
         if not rows:
             return f"<p style=\"color:var(--muted)\">{empty_msg}</p>"
         body = "\n".join(_tx_row(t) for t in rows)
-        return f"""<table class="tx-table">
-<thead><tr><th>Time (UTC)</th><th>From</th><th>To</th><th>Amount</th><th>Blue</th><th>Node</th></tr></thead>
+        return f"""<div class="tx-table-wrap">
+<table class="tx-table">
+<thead><tr><th>Time (UTC)</th><th>From</th><th>To</th><th>Amount</th><th>Blue / Red</th><th>Node</th></tr></thead>
 <tbody>{body}</tbody>
-</table>"""
+</table>
+</div>"""
+
+    if has_rating:
+        br_card_body = (
+            f'<div style="display:flex;align-items:center;gap:0.6rem;margin-top:0.35rem">'
+            f'<span class="br-bar br-bar-lg" aria-label="{avg_blue_int}% blue, {avg_red_int}% red">'
+            f'<span class="br-fill br-blue" style="width:{avg_blue_int}%"></span>'
+            f'<span class="br-fill br-red"  style="width:{avg_red_int}%"></span>'
+            f'</span>'
+            f'<span class="br-num">{avg_blue_int}%</span>'
+            f'</div>'
+        )
+    else:
+        br_card_body = '<div class="value" style="font-size:1.1rem;color:var(--muted)">n/a</div>'
 
     stats = f"""<div class="stats-grid">
   <div class="stat-card">
@@ -711,7 +798,7 @@ def build_handle_detail(handle: str, txs_for_handle: list[dict]) -> str:
   </div>
   <div class="stat-card">
     <div class="label">Blue / Red (outgoing)</div>
-    <div class="value" style="font-size:1.1rem">{html.escape(blue_label)}</div>
+    {br_card_body}
     <div class="sub">how recipients rated this handle</div>
   </div>
 </div>"""
@@ -729,7 +816,123 @@ def build_handle_detail(handle: str, txs_for_handle: list[dict]) -> str:
 <h2>Sent <span style="font-weight:400;font-size:1rem;color:var(--muted)">({len(sent)})</span></h2>
 {tx_table(sent, "No outgoing transfers yet.")}
 """
-    return _page_shell(f"{handle} — ubi.world", body, active="handle")
+    return _page_shell(f"{handle} — ubi.world", body, active="handle", topbar_label="Handle")
+
+
+
+# --------------------------------------------------------------------------- #
+# /ledger/ browse pages — top-bar shell + family palette.
+# Replaces the Google-Fonts CDN island that Stefano flagged as "unstyled".
+# --------------------------------------------------------------------------- #
+
+def build_ledger_root_browse() -> str:
+    """Top-level /ledger/ browse page — describes structure of the raw tree."""
+    body = """<p class="crumbs"><a href="/">ubi.world</a> / ledger</p>
+<p class="tagline">Public ledger</p>
+<h1>Federated UBI transactions, openly mirrored.</h1>
+<p>
+  This directory holds the raw signed JSON transactions and node records
+  for the Time for UBI federation. The human-readable rendering lives at
+  <a href="/">ubi.world</a>; this tree is for verifiers and archivists.
+</p>
+
+<div class="notice">
+  <strong>What lives here</strong>
+  <code>/ledger/transactions/</code> — one JSON file per signed transaction.<br>
+  <code>/ledger/nodes/</code> — one JSON file per participating node.<br>
+  <code>/ledger/README.txt</code> — short explainer for anyone browsing the raw tree.
+</div>
+
+<h2>Reading the ledger directly</h2>
+<p>
+  Every file is plain text. You can fetch the directories directly:
+</p>
+<p>
+  <a href="/ledger/transactions/">/ledger/transactions/</a> &middot;
+  <a href="/ledger/nodes/">/ledger/nodes/</a> &middot;
+  <a href="/ledger/README.txt">/ledger/README.txt</a>
+</p>
+
+<h2>How transactions get here</h2>
+<p>
+  Participating nodes sign each transfer with their Ed25519 private key
+  and write the signed JSON to their slice of <code>/ledger/transactions/</code>.
+  Tampering would break the signature; anyone can verify offline using the
+  signing node's public key. See the spec at
+  <a href="https://ubi.vision/">ubi.vision</a> for the signature scheme.
+</p>
+<p>
+  ubi.world is a mirror, not a router. If this site disappeared, the
+  transactions would still exist in the records of the nodes that signed
+  them. Anyone with a copy of this directory can host a duplicate mirror.
+</p>
+
+<p style="margin-top:2rem">
+  <a href="/">&larr; back to ubi.world</a>
+</p>
+"""
+    return _page_shell("ubi.world/ledger — public ledger of Time for UBI", body, active="ledger", topbar_label="Public Ledger")
+
+
+def build_ledger_transactions_browse() -> str:
+    """`/ledger/transactions/` browse page — describes the on-disk tx tree."""
+    body = """<p class="crumbs"><a href="/">ubi.world</a> / <a href="/ledger/">ledger</a> / transactions</p>
+<p class="tagline">Public ledger / transactions</p>
+<h1>Signed transaction records.</h1>
+<p>
+  Each file in this directory is a single signed JSON transaction published
+  by a participating node. File names are numbered so anyone can
+  independently verify integrity.
+</p>
+
+<div class="notice">
+  <strong>Status</strong>
+  This is the raw on-disk listing. For the human-readable transaction
+  list, see <a href="/">ubi.world</a>. For the signed JSON of one
+  specific transaction, click through Apache's directory listing below.
+</div>
+
+<p>
+  Signature scheme and verification rules are documented in the spec at
+  <a href="https://ubi.vision/">ubi.vision</a>.
+</p>
+
+<p style="margin-top:2rem">
+  <a href="/ledger/">&larr; back to /ledger/</a>
+</p>
+"""
+    return _page_shell("ubi.world/ledger/transactions — Public Ledger Browser", body, active="ledger", topbar_label="Public Ledger")
+
+
+def build_ledger_nodes_browse() -> str:
+    """`/ledger/nodes/` browse page — describes the node directory."""
+    body = """<p class="crumbs"><a href="/">ubi.world</a> / <a href="/ledger/">ledger</a> / nodes</p>
+<p class="tagline">Public ledger / nodes</p>
+<h1>Participating node directory.</h1>
+<p>
+  Each file in this directory is a small JSON record for one node on the
+  federation: domain, operator handle, public key, and the date it first
+  announced itself. Any verifier can use these public keys to check the
+  signatures on transactions in
+  <a href="/ledger/transactions/">/ledger/transactions/</a>.
+</p>
+
+<div class="notice">
+  <strong>Status</strong>
+  Empty until federation Stage 2b ships. The first records will appear as
+  nodes complete the announcement protocol.
+</div>
+
+<p>
+  Node announcement format and key rotation rules are documented in the
+  spec at <a href="https://ubi.vision/">ubi.vision</a>.
+</p>
+
+<p style="margin-top:2rem">
+  <a href="/ledger/">&larr; back to /ledger/</a>
+</p>
+"""
+    return _page_shell("ubi.world/ledger/nodes — Public Ledger Browser", body, active="ledger", topbar_label="Public Ledger")
 
 
 # --------------------------------------------------------------------------- #
@@ -771,7 +974,7 @@ def generate(ledger_root: Path) -> dict:
     by_handle = index_by_handle(txs)
     all_handles = list(by_handle.keys())
 
-    counts = {"home": 0, "tx": 0, "handle": 0, "style": 0, "txs_loaded": len(txs)}
+    counts = {"home": 0, "tx": 0, "handle": 0, "style": 0, "browse": 0, "txs_loaded": len(txs)}
 
     # style.css
     if _atomic_write(out_root / "style.css", STYLE_CSS.lstrip()):
@@ -794,6 +997,16 @@ def generate(ledger_root: Path) -> dict:
     for handle, handle_txs in by_handle.items():
         if _atomic_write(handle_out / handle_filename(handle), build_handle_detail(handle, handle_txs)):
             counts["handle"] += 1
+
+    # /ledger/ browse pages — replace the old Google-Fonts island with the
+    # family top-bar shell so they match the rest of the site.
+    counts["browse"] = 0
+    if _atomic_write(ledger_root / "index.html", build_ledger_root_browse()):
+        counts["browse"] += 1
+    if _atomic_write(ledger_root / "transactions" / "index.html", build_ledger_transactions_browse()):
+        counts["browse"] += 1
+    if _atomic_write(ledger_root / "nodes" / "index.html", build_ledger_nodes_browse()):
+        counts["browse"] += 1
 
     return counts
 
