@@ -89,8 +89,12 @@
 
 <div class="login" id="loginBox" hidden>
   <p class="serif" style="font-size:1.4rem;color:var(--fg)">Time for UBI</p>
-  <p>Open the bot <a href="https://t.me/__BOT_USERNAME__">@__BOT_USERNAME__</a> and send <code>/app</code>.
-     It answers with a link that logs you in here.</p>
+  <p>Send <code>/app</code> to <a href="https://t.me/__BOT_USERNAME__">@__BOT_USERNAME__</a> in Telegram and type the code it gives you.</p>
+  <form id="codeForm" class="row" style="justify-content:center;margin-top:1rem">
+    <input type="text" id="loginCode" placeholder="XXXX-XXXX" autocomplete="one-time-code" autocapitalize="characters" style="max-width:11rem;text-align:center;letter-spacing:.15em;font-family:ui-monospace,monospace">
+    <button type="submit">Log in</button>
+  </form>
+  <div class="msg err" id="codeMsg"></div>
 </div>
 
 <script>
@@ -180,6 +184,13 @@ $('redeemForm').addEventListener('submit', async e => {
   m.textContent = ({own_coupon: 'That is your own coupon. It cannot come back to you.',
     redeemed: 'Already redeemed.', expired: 'Expired. Its time went to the Universal Circles.',
     not_found: 'No such coupon.', locked: 'Locked to another handle.'})[r.error] || 'Could not redeem.';
+});
+
+$('codeForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const r = await api('/auth/code', {code: $('loginCode').value});
+  if (r.ok) { $('loginCode').value = ''; $('codeMsg').textContent = ''; load(); }
+  else $('codeMsg').textContent = 'That code is wrong or spent. Send /app again.';
 });
 
 tryWebAppLogin().then(load);

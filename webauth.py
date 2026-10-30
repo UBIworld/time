@@ -64,8 +64,26 @@ async def init_webauth_schema() -> None:
         await db.commit()
 
 
+# Codes are typed by hand, so: short, upper-case, no 0/O/1/I. 8 chars of a
+# 32-symbol alphabet is ~40 bits; a code lives 10 minutes and is burned on use.
+_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def _new_code() -> str:
+    raw = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(8))
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def normalize_code(text: str) -> str:
+    t = "".join(ch for ch in text.upper() if ch.isalnum())
+    return f"{t[:4]}-{t[4:8]}" if len(t) >= 8 else t
+
+
 async def create_login_token(telegram_id: int) -> str:
-    token = secrets.token_urlsafe(24)
+    """One-time login code. The bot shows it; the user types it in the browser.
+    The code never contains the app's address, so nothing about where the
+    app lives passes through Telegram."""
+    token = _new_code()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "DELETE FROM web_login_tokens WHERE expires_at < ?", (int(time.time()),)

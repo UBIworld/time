@@ -551,13 +551,10 @@ async def cmd_app(message: Message, state: FSMContext):
     if not user:
         await message.answer("You're not registered yet. Type /start to begin.")
         return
-    if not config.WEB_PUBLIC_URL:
-        await message.answer("The web app is not configured on this node.")
-        return
-    token = await webauth.create_login_token(user["telegram_id"])
+    code = await webauth.create_login_token(user["telegram_id"])
     await message.answer(
-        f"Your wallet in the browser (link works once, for 10 minutes):\n"
-        f"{config.WEB_PUBLIC_URL}/login/{token}"
+        f"Open your wallet app in the browser and enter this code "
+        f"(works once, for 10 minutes):\n\n{code}"
     )
 
 
@@ -675,7 +672,7 @@ async def cmd_help(message: Message, state: FSMContext):
         "/coupon 2h 30m — Make a time coupon (QR + link) for someone\n"
         "/coupons — Your coupons and what happened to them\n"
         "/redeem <link> — Redeem a coupon you were given\n"
-        "/app — Open your wallet in the browser\n"
+        "/app — Code to log in to the wallet app in your browser\n"
         "/history — Your recent transactions\n"
         "/handle — Display your Handle\n"
         "/circles — Universal Circles balances\n\n"

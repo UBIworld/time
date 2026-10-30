@@ -76,15 +76,15 @@ def _set_session(resp: web.StreamResponse, telegram_id: int) -> None:
     )
 
 
-async def login(request: web.Request):
-    tid = await webauth.consume_login_token(request.match_info["token"])
+async def auth_code(request: web.Request):
+    body = await request.json()
+    code = webauth.normalize_code(str(body.get("code", "")))
+    tid = await webauth.consume_login_token(code) if len(code) == 9 else None
     if tid is None:
-        return web.Response(
-            text=(WEB_DIR / "login-failed.html").read_text(), content_type="text/html", status=403
-        )
-    resp = web.HTTPFound("/")
+        return _json({"ok": False, "error": "bad_code"}, 403)
+    resp = _json({"ok": True})
     _set_session(resp, tid)
-    raise resp
+    return resp
 
 
 async def auth_webapp(request: web.Request):
@@ -264,7 +264,7 @@ def make_app() -> web.Application:
     app.add_routes([
         web.get("/", index),
         web.get("/c/{id}", coupon_public_page),
-        web.get("/login/{token}", login),
+        web.post("/auth/code", auth_code),
         web.post("/auth/webapp", auth_webapp),
         web.get("/logout", logout),
         web.get("/api/me", api_me),
