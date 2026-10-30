@@ -36,6 +36,7 @@ from apscheduler.triggers.cron import CronTrigger
 import config
 import coupons
 import database as db
+import webauth
 from database import RESERVED_HANDLES
 from wallet import (
     format_time,
@@ -542,6 +543,24 @@ async def cmd_coupon(message: Message, command: CommandObject, state: FSMContext
     )
 
 
+@router.message(Command("app"), StateFilter("*"))
+async def cmd_app(message: Message, state: FSMContext):
+    """Magic link into the web app (one use, ten minutes)."""
+    await state.clear()
+    user = await db.get_user(message.from_user.id)
+    if not user:
+        await message.answer("You're not registered yet. Type /start to begin.")
+        return
+    if not config.WEB_PUBLIC_URL:
+        await message.answer("The web app is not configured on this node.")
+        return
+    token = await webauth.create_login_token(user["telegram_id"])
+    await message.answer(
+        f"Your wallet in the browser (link works once, for 10 minutes):\n"
+        f"{config.WEB_PUBLIC_URL}/login/{token}"
+    )
+
+
 @router.message(Command("coupons"), StateFilter("*"))
 async def cmd_coupons(message: Message, state: FSMContext):
     await state.clear()
@@ -656,6 +675,7 @@ async def cmd_help(message: Message, state: FSMContext):
         "/coupon 2h 30m — Make a time coupon (QR + link) for someone\n"
         "/coupons — Your coupons and what happened to them\n"
         "/redeem <link> — Redeem a coupon you were given\n"
+        "/app — Open your wallet in the browser\n"
         "/history — Your recent transactions\n"
         "/handle — Display your Handle\n"
         "/circles — Universal Circles balances\n\n"
@@ -1361,6 +1381,7 @@ async def main():
     # Initialize database
     await db.init_db()
     await coupons.init_coupons_schema()
+    await webauth.init_webauth_schema()
     logger.info("Database initialized.")
 
     global BOT_USERNAME

@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>Time for UBI</title>
+<link rel="icon" href="/static/favicon.ico">
+<link rel="stylesheet" href="/static/app.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<div class="topbar">
+  <img src="/static/flag.png" alt="">
+  <span class="brand">Time for UBI</span>
+  <span class="handle" id="handle"></span>
+</div>
+
+<main id="app" hidden>
+  <section class="card">
+    <div class="balances">
+      <div class="bal">
+        <div class="label">Daily Wallet</div>
+        <div class="value" id="wallet">—</div>
+        <div class="sub">resets in <span class="countdown" id="countdown">—</span></div>
+      </div>
+      <div class="bal">
+        <div class="label">Time Vault</div>
+        <div class="value" id="vault">—</div>
+        <div class="sub">cap <span id="cap">—</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Make a coupon</h2>
+    <form id="couponForm" class="row">
+      <div class="field"><label>Hours</label><input type="number" id="h" min="0" max="48" value="0" inputmode="numeric"></div>
+      <div class="field"><label>Minutes</label><input type="number" id="m" min="0" max="59" value="30" inputmode="numeric"></div>
+      <div class="field" style="flex:1;min-width:9rem"><label>Valid</label>
+        <select id="validity">
+          <option value="">until midnight UTC</option>
+          <option value="3600">1 hour</option>
+          <option value="86400">1 day</option>
+          <option value="259200">3 days</option>
+          <option value="604800">7 days</option>
+        </select>
+      </div>
+      <button type="submit" id="makeBtn">Make coupon</button>
+    </form>
+    <p class="hint">The time leaves your Wallet now. Whoever opens the coupon first receives it.
+      Not redeemed by expiry, it flows to the Universal Circles, not back to you.</p>
+    <div class="msg" id="couponMsg"></div>
+    <div class="qr" id="qr" hidden>
+      <div class="big" id="qrAmount"></div>
+      <img id="qrImg" alt="Coupon QR">
+      <div class="link" id="qrLink"></div>
+      <div class="row">
+        <button type="button" class="secondary" id="copyBtn">Copy link</button>
+        <button type="button" class="secondary" id="shareBtn" hidden>Share</button>
+      </div>
+      <div class="hint" id="qrExpiry"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Redeem a coupon</h2>
+    <form id="redeemForm" class="row">
+      <input type="text" id="code" placeholder="Paste the coupon link or code" style="flex:1" autocomplete="off">
+      <button type="submit">Redeem</button>
+    </form>
+    <div class="msg" id="redeemMsg"></div>
+  </section>
+
+  <section class="card">
+    <h2>Your coupons</h2>
+    <ul class="list" id="coupons"></ul>
+    <p class="empty" id="couponsEmpty" hidden>No coupons yet.</p>
+  </section>
+
+  <section class="card">
+    <h2>Last transactions</h2>
+    <ul class="list" id="txs"></ul>
+    <p class="empty" id="txsEmpty" hidden>Nothing yet.</p>
+  </section>
+
+  <p class="center hint"><a href="/logout">Log out</a></p>
+</main>
+
+<div class="login" id="loginBox" hidden>
+  <p class="serif" style="font-size:1.4rem;color:var(--fg)">Time for UBI</p>
+  <p>Open the bot <a href="https://t.me/__BOT_USERNAME__">@__BOT_USERNAME__</a> and send <code>/app</code>.
+     It answers with a link that logs you in here.</p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = s => { s = Math.max(0, s|0); const h = (s/3600|0), m = (s%3600/60|0), x = s%60;
+  return `${h}h ${String(m).padStart(2,'0')}m ${String(x).padStart(2,'0')}s`; };
+let resetIn = null;
+
+async function api(path, body){
+  const r = await fetch(path, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {});
+  return r.json();
+}
+
+async function tryWebAppLogin(){
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg && tg.initData) { tg.ready(); tg.expand(); await api('/auth/webapp', {initData: tg.initData}); }
+}
+
+function statusText(c){
+  if (c.status === 'issued') return 'open until ' + c.expires_at.slice(0,16) + ' UTC';
+  if (c.status === 'redeemed') return 'redeemed by ' + c.redeemer_handle;
+  return 'expired, went to the Circles';
+}
+
+async function load(){
+  const me = await api('/api/me');
+  if (!me.ok) { $('loginBox').hidden = false; $('app').hidden = true; return; }
+  $('loginBox').hidden = true; $('app').hidden = false;
+  $('handle').textContent = me.handle;
+  $('wallet').textContent = me.wallet_text;
+  $('vault').textContent = me.vault_text;
+  $('cap').textContent = fmt(me.vault_capacity);
+  resetIn = me.next_reset_in;
+  const cl = $('coupons'); cl.innerHTML = '';
+  me.coupons.forEach(c => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span><a href="/c/${c.id}" class="mono">${c.amount_text}</a></span><span class="status ${c.status}">${statusText(c)}</span>`;
+    cl.appendChild(li);
+  });
+  $('couponsEmpty').hidden = me.coupons.length > 0;
+  const tl = $('txs'); tl.innerHTML = '';
+  me.transactions.forEach(t => {
+    const li = document.createElement('li');
+    const arrow = t.direction === 'sent' ? '→' : '←';
+    li.innerHTML = `<span>${t.amount_text} ${arrow} <span class="mono">${t.other}</span></span><span class="status">${t.at.slice(0,16)}</span>`;
+    tl.appendChild(li);
+  });
+  $('txsEmpty').hidden = me.transactions.length > 0;
+}
+
+setInterval(() => { if (resetIn !== null) { resetIn -= 1; $('countdown').textContent = fmt(resetIn); if (resetIn <= 0) load(); } }, 1000);
+
+$('couponForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const secs = (+$('h').value || 0) * 3600 + (+$('m').value || 0) * 60;
+  const v = $('validity').value;
+  $('couponMsg').textContent = ''; $('couponMsg').className = 'msg';
+  if (secs < 60) { $('couponMsg').textContent = 'At least one minute.'; $('couponMsg').className = 'msg err'; return; }
+  $('makeBtn').disabled = true;
+  const r = await api('/api/coupon', {amount_seconds: secs, validity_seconds: v ? +v : null});
+  $('makeBtn').disabled = false;
+  if (!r.ok) {
+    $('couponMsg').className = 'msg err';
+    $('couponMsg').textContent = r.error === 'insufficient_balance'
+      ? `Not enough time. You have ${fmt(r.available)} (Wallet + Vault).` : 'Could not make the coupon.';
+    return;
+  }
+  const c = r.coupon;
+  $('qr').hidden = false;
+  $('qrAmount').textContent = c.amount_text;
+  $('qrImg').src = c.qr + '?t=' + Date.now();
+  $('qrLink').textContent = c.link;
+  $('qrExpiry').textContent = 'Expires ' + c.expires_at.slice(0,16) + ' UTC' +
+    (r.capped_to_midnight ? ' (part of it came from your Wallet, so it cannot outlive midnight)' : '');
+  $('shareBtn').hidden = !navigator.share;
+  $('copyBtn').onclick = () => navigator.clipboard.writeText(c.link).then(() => { $('copyBtn').textContent = 'Copied'; setTimeout(() => $('copyBtn').textContent = 'Copy link', 1500); });
+  $('shareBtn').onclick = () => navigator.share({title: 'Time for UBI coupon', text: `${c.amount_text} of time for you`, url: c.link});
+  load();
+});
+
+$('redeemForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const m = $('redeemMsg'); m.textContent = ''; m.className = 'msg';
+  const r = await api('/api/redeem', {code: $('code').value});
+  if (r.ok) { m.className = 'msg ok'; m.textContent = `You received ${r.amount_text} from ${r.from}. Vault: ${r.vault_text}.`; $('code').value = ''; load(); return; }
+  m.className = 'msg err';
+  m.textContent = ({own_coupon: 'That is your own coupon. It cannot come back to you.',
+    redeemed: 'Already redeemed.', expired: 'Expired. Its time went to the Universal Circles.',
+    not_found: 'No such coupon.', locked: 'Locked to another handle.'})[r.error] || 'Could not redeem.';
+});
+
+tryWebAppLogin().then(load);
+</script>
+</body>
+</html>

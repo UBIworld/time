@@ -60,6 +60,9 @@ NODE_KEY_DIR = os.path.expanduser(
     os.environ.get("NODE_KEY_DIR", "~/.ubi-bot")
 )
 
+# Web app (webapp.py): public base URL used in /app login links; empty = off.
+WEB_PUBLIC_URL = os.environ.get("WEB_PUBLIC_URL", "").strip().rstrip("/")
+
 # Time constants (seconds)
 DAILY_WALLET_AMOUNT = 86400    # 24h = 86,400 seconds
 VAULT_CAPACITY_TIER1 = 86400  # 24h for Tier 1

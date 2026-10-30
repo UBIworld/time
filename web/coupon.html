@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>Time coupon · Time for UBI</title>
+<link rel="icon" href="/static/favicon.ico">
+<link rel="stylesheet" href="/static/app.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<div class="topbar">
+  <a href="/" style="display:contents"><img src="/static/flag.png" alt=""><span class="brand">Time for UBI</span></a>
+</div>
+<main>
+  <section class="card center">
+    <h2>Time coupon</h2>
+    <div class="big" id="amount">…</div>
+    <p id="from" class="hint"></p>
+    <div class="qr" id="qr" hidden><img id="qrImg" alt="Coupon QR"><div class="link" id="link"></div></div>
+    <p class="msg" id="status"></p>
+    <div class="row" style="justify-content:center;margin-top:1rem">
+      <button id="redeemBtn" hidden>Redeem into my Vault</button>
+      <a id="tgBtn" hidden><button type="button" class="secondary">Open in Telegram</button></a>
+    </div>
+    <p class="hint" id="help"></p>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const ID = "__COUPON_ID__";
+async function api(path, body){
+  const r = await fetch(path, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {});
+  return r.json();
+}
+async function load(){
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg && tg.initData) { tg.ready(); await api('/auth/webapp', {initData: tg.initData}); }
+  const r = await api('/api/coupon/' + ID);
+  if (!r.ok) { $('amount').textContent = '—'; $('status').textContent = 'This coupon does not exist.'; return; }
+  const c = r.coupon;
+  $('amount').textContent = c.amount_text;
+  $('from').textContent = 'from ' + c.issuer_handle;
+  $('tgBtn').href = c.link;
+  if (c.status === 'issued') {
+    $('qr').hidden = false; $('qrImg').src = '/api/coupon/' + ID + '/qr.png'; $('link').textContent = c.link;
+    $('status').textContent = 'Open until ' + c.expires_at.slice(0,16) + ' UTC.';
+    if (c.is_mine) { $('help').textContent = 'This is your coupon. Share the QR or the link; it cannot come back to you.'; }
+    else if (r.logged_in) { $('redeemBtn').hidden = false; }
+    else { $('tgBtn').hidden = false; $('help').textContent = 'Open it in Telegram to receive the time. No handle yet? The bot creates one for you.'; }
+  } else if (c.status === 'redeemed') {
+    $('status').textContent = 'Already redeemed by ' + c.redeemer_handle + '.';
+  } else {
+    $('status').textContent = 'Expired at ' + c.expires_at.slice(0,16) + ' UTC. Its time flowed to the Universal Circles.';
+  }
+}
+$('redeemBtn').addEventListener('click', async () => {
+  $('redeemBtn').disabled = true;
+  const r = await api('/api/redeem', {code: ID});
+  if (r.ok) { $('status').className = 'msg ok'; $('status').textContent = `You received ${r.amount_text} from ${r.from}. Your Vault: ${r.vault_text}.`; $('redeemBtn').hidden = true; $('qr').hidden = true; $('help').innerHTML = '<a href="/">Back to your wallet</a>'; }
+  else { $('status').className = 'msg err'; $('status').textContent = r.error === 'own_coupon' ? 'That is your own coupon.' : 'Could not redeem (' + r.error + ').'; $('redeemBtn').disabled = false; }
+});
+load();
+</script>
+</body>
+</html>
