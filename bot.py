@@ -26,6 +26,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     BufferedInputFile,
+    WebAppInfo,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -133,6 +134,15 @@ class DissolveCircle(StatesGroup):
 def mono(handle: str) -> str:
     """Wrap a handle string in backticks for Telegram monospace rendering."""
     return f"`{handle}`"
+
+
+def _wallet_button() -> InlineKeyboardMarkup | None:
+    """Inline button that opens the wallet as a Telegram Mini App."""
+    if not config.WEB_PUBLIC_URL:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Open wallet", web_app=WebAppInfo(url=config.WEB_PUBLIC_URL + "/")),
+    ]])
 
 
 def _is_cancel(text: str) -> bool:
@@ -349,6 +359,7 @@ async def cmd_balance(message: Message, state: FSMContext):
         f"  Handle: {mono(user['handle_display'])}\n"
         f"  ⏰ Next reset in: {format_time(countdown)}",
         parse_mode="Markdown",
+        reply_markup=_wallet_button(),
     )
 
 
@@ -553,8 +564,9 @@ async def cmd_app(message: Message, state: FSMContext):
         return
     code = await webauth.create_login_token(user["telegram_id"])
     await message.answer(
-        f"Open your wallet app in the browser and enter this code "
-        f"(works once, for 10 minutes):\n\n{code}"
+        "Tap the button to open your wallet here in Telegram.\n\n"
+        f"In another browser, enter this code instead (works once, for 10 minutes):\n{code}",
+        reply_markup=_wallet_button(),
     )
 
 
@@ -672,7 +684,7 @@ async def cmd_help(message: Message, state: FSMContext):
         "/coupon 2h 30m — Make a time coupon (QR + link) for someone\n"
         "/coupons — Your coupons and what happened to them\n"
         "/redeem <link> — Redeem a coupon you were given\n"
-        "/app — Code to log in to the wallet app in your browser\n"
+        "/app — Open your wallet (in Telegram, or a code for the browser)\n"
         "/history — Your recent transactions\n"
         "/handle — Display your Handle\n"
         "/circles — Universal Circles balances\n\n"
