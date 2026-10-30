@@ -8,3 +8,6 @@ pytz>=2024.1
 # ubi.world/ledger/. Same library the federation track uses for node
 # identity keys, so adding it here costs no new dependency overall.
 pynacl>=1.5,<2.0
+
+# Time coupons: QR image for /coupon (issue 02).
+qrcode[pil]>=7.4

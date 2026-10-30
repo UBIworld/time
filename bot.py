@@ -9,13 +9,15 @@ Run: python bot.py
 """
 
 import asyncio
+import io
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -23,6 +25,7 @@ from aiogram.types import (
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    BufferedInputFile,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -31,6 +34,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 import config
+import coupons
 import database as db
 from database import RESERVED_HANDLES
 from wallet import (
@@ -78,7 +82,8 @@ dp.include_router(router)
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="/balance"), KeyboardButton(text="/history")],
+        [KeyboardButton(text="/balance"), KeyboardButton(text="/coupon")],
+        [KeyboardButton(text="/coupons"), KeyboardButton(text="/history")],
         [KeyboardButton(text="/circles"), KeyboardButton(text="/handle")],
         [KeyboardButton(text="/cc"),      KeyboardButton(text="/create")],
         [KeyboardButton(text="/help")],
@@ -138,16 +143,36 @@ def _is_cancel(text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 @router.message(CommandStart(), StateFilter("*"))
-async def cmd_start(message: Message, state: FSMContext):
+async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
     await state.clear()
     user = await db.get_user(message.from_user.id)
+
+    # Deep link from a coupon QR / share link: t.me/<bot>?start=c_<id>
+    coupon_id = None
+    if command.args and command.args.startswith("c_"):
+        coupon_id = command.args[2:]
+
     if user:
+        if coupon_id:
+            await _redeem_and_report(message, coupon_id)
+            return
         await message.answer(
             f"Welcome back, {user['handle_display']}!\n\n"
             f"Your handle is active. Use /help to see all commands.",
             reply_markup=MAIN_KEYBOARD,
         )
         return
+
+    if coupon_id:
+        c = await coupons.get_coupon(coupon_id)
+        if c and c["status"] == "issued":
+            await state.update_data(pending_coupon=coupon_id)
+            await message.answer(
+                f"Someone is giving you {format_time(c['amount'])}.\n"
+                "Create your Handle and the time is yours."
+            )
+        else:
+            await message.answer(_coupon_unavailable_text(c))
 
     await message.answer(
         "Welcome to Time for UBI.\n\n"
@@ -285,6 +310,7 @@ async def reg_confirm(message: Message, state: FSMContext):
         slot3=data["slot3"],
     )
 
+    pending_coupon = data.get("pending_coupon")
     await state.clear()
     await message.answer(
         f"You're in! Welcome to the time economy.\n\n"
@@ -296,6 +322,8 @@ async def reg_confirm(message: Message, state: FSMContext):
         parse_mode="Markdown",
         reply_markup=MAIN_KEYBOARD,
     )
+    if pending_coupon:
+        await _redeem_and_report(message, pending_coupon)
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +401,7 @@ async def cmd_history(message: Message, state: FSMContext):
     )
 
     if not transactions:
-        await message.answer("No transactions yet. Time coupons are coming soon.")
+        await message.answer("No transactions yet. Make a coupon with /coupon 30m")
         return
 
     await message.answer(
@@ -396,16 +424,203 @@ async def cmd_history(message: Message, state: FSMContext):
 # --- Feature 1 callback: "Send again" button from history ---
 
 # ---------------------------------------------------------------------------
-# /send — retired; sending time becomes time coupons (issue 02)
+# Time coupons — how time is sent (issue 02)
 # ---------------------------------------------------------------------------
+
+BOT_USERNAME: str = ""   # filled in main() from get_me()
+
+_VALIDITY_RE = re.compile(r'\b(?:for|valid)\s+(\d+)\s*(d|day|days|h|hour|hours)\b', re.I)
+
+
+def coupon_link(coupon_id: str) -> str:
+    return f"https://t.me/{BOT_USERNAME}?start=c_{coupon_id}"
+
+
+def _qr_png(data: str) -> bytes:
+    import qrcode
+    img = qrcode.make(data, box_size=8, border=2)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _fmt_expiry(sql_ts: str) -> str:
+    return sql_ts[:16] + " UTC"
+
+
+def _coupon_unavailable_text(c: dict | None) -> str:
+    if c is None:
+        return "This coupon does not exist."
+    if c["status"] == "redeemed":
+        return "This coupon has already been redeemed."
+    if c["status"] == "expired":
+        return (
+            f"This coupon expired at {_fmt_expiry(c['expires_at'])}. "
+            "Its time flowed to the Universal Circles."
+        )
+    return "This coupon cannot be redeemed."
+
+
+def _parse_coupon_args(text: str) -> tuple[int | None, int | None, str | None]:
+    """Return (amount_seconds, validity_seconds, error)."""
+    validity = None
+    m = _VALIDITY_RE.search(text)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2).lower()
+        validity = n * 86400 if unit.startswith("d") else n * 3600
+        text = _VALIDITY_RE.sub("", text)
+    amount = parse_time_input(text)
+    if amount is None:
+        return None, None, "amount"
+    return amount, validity, None
+
 
 @router.message(Command("send"), StateFilter("*"))
 async def cmd_send_retired(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "Sending time now works with time coupons: you make a coupon for an "
-        "amount, the other person scans or opens it. /coupon is coming next."
+        "Sending time works with coupons now. Make one with /coupon, "
+        "for example: /coupon 2h 30m"
     )
+
+
+@router.message(Command("coupon"), StateFilter("*"))
+async def cmd_coupon(message: Message, command: CommandObject, state: FSMContext):
+    await state.clear()
+    user = await db.get_user(message.from_user.id)
+    if not user:
+        await message.answer("You're not registered yet. Type /start to begin.")
+        return
+
+    args = (command.args or "").strip()
+    if not args:
+        await message.answer(
+            "Make a time coupon. Whoever opens it first receives the time.\n\n"
+            "  /coupon 30m\n"
+            "  /coupon 2h 30m\n"
+            "  /coupon 1h for 3d   (only time from your Vault can outlive midnight)\n\n"
+            f"Wallet: {format_time(user['daily_wallet'])}   "
+            f"Vault: {format_time(user['time_vault'])}\n"
+            "A coupon expires at midnight UTC unless you say otherwise. "
+            "Unredeemed time flows to the Universal Circles, not back to you."
+        )
+        return
+
+    amount, validity, err = _parse_coupon_args(args)
+    if err:
+        await message.answer("I could not read the amount. Try: /coupon 2h 30m")
+        return
+
+    result = await coupons.issue_coupon(user["telegram_id"], amount, validity)
+    if not result["success"]:
+        if result["error"] == "insufficient_balance":
+            await message.answer(
+                f"Not enough time. You asked for {format_time(amount)} and have "
+                f"{format_time(result['available'])} (Wallet + Vault)."
+            )
+        else:
+            await message.answer("Could not make the coupon.")
+        return
+
+    c = result["coupon"]
+    link = coupon_link(c["id"])
+    expires = c["expires_at"].strftime("%Y-%m-%d %H:%M") + " UTC"
+    note = ""
+    if result["capped_to_midnight"]:
+        note = "\nPart of this came from your Wallet, so it expires at midnight UTC."
+    caption = (
+        f"Coupon for {format_time(amount)}\n"
+        f"Expires {expires}{note}\n\n"
+        f"Scan, or forward this message, or share the link:\n{link}\n\n"
+        f"Wallet left: {format_time(result['issuer_wallet_remaining'])}   "
+        f"Vault left: {format_time(result['issuer_vault_remaining'])}"
+    )
+    await message.answer_photo(
+        photo=BufferedInputFile(_qr_png(link), filename=f"coupon-{c['id']}.png"),
+        caption=caption,
+    )
+
+
+@router.message(Command("coupons"), StateFilter("*"))
+async def cmd_coupons(message: Message, state: FSMContext):
+    await state.clear()
+    user = await db.get_user(message.from_user.id)
+    if not user:
+        await message.answer("You're not registered yet. Type /start to begin.")
+        return
+    rows = await coupons.list_coupons_for_issuer(user["telegram_id"], limit=10)
+    if not rows:
+        await message.answer("No coupons yet. Make one with /coupon 30m")
+        return
+    lines = ["Your coupons (last 10)", ""]
+    for c in rows:
+        if c["status"] == "issued":
+            tail = f"open until {_fmt_expiry(c['expires_at'])}"
+        elif c["status"] == "redeemed":
+            tail = f"redeemed by {c['redeemer_handle']}"
+        else:
+            tail = "expired, went to the Circles"
+        lines.append(f"{format_time(c['amount'])}  {tail}")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("redeem"), StateFilter("*"))
+async def cmd_redeem(message: Message, command: CommandObject, state: FSMContext):
+    """Paste a coupon link or code: /redeem c_abc… or /redeem https://t.me/…?start=c_abc…"""
+    await state.clear()
+    raw = (command.args or "").strip()
+    m = re.search(r'c_([A-Za-z0-9_-]{8,})', raw)
+    if not m:
+        await message.answer("Paste the coupon link or code after /redeem.")
+        return
+    user = await db.get_user(message.from_user.id)
+    if not user:
+        await message.answer("You're not registered yet. Type /start to begin.")
+        return
+    await _redeem_and_report(message, m.group(1))
+
+
+async def _redeem_and_report(message: Message, coupon_id: str) -> None:
+    result = await coupons.redeem_coupon(coupon_id, message.from_user.id)
+    if not result["success"]:
+        err = result["error"]
+        c = result.get("coupon")
+        if err == "own_coupon":
+            await message.answer(
+                "That is your own coupon. It cannot come back to you: "
+                "someone else redeems it, or at expiry it flows to the Circles."
+            )
+        elif err == "locked":
+            await message.answer("This coupon is locked to a different Handle.")
+        else:
+            await message.answer(_coupon_unavailable_text(c))
+        return
+
+    c = result["coupon"]
+    overflow_note = ""
+    if result["overflow"] > 0:
+        overflow_note = (
+            f"\n({format_time(result['overflow'])} was above your Vault capacity "
+            f"and flowed to the Universal Circles.)"
+        )
+    await message.answer(
+        f"You received {format_time(result['amount'])} from {mono(c['issuer_handle'])}.\n"
+        f"Your Time Vault: {format_time(result['redeemer_vault_new'])}{overflow_note}",
+        parse_mode="Markdown",
+        reply_markup=MAIN_KEYBOARD,
+    )
+    try:
+        await bot.send_message(
+            chat_id=c["issuer_telegram_id"],
+            text=(
+                f"Your coupon for {format_time(result['amount'])} was redeemed by "
+                f"{mono(c['redeemer_handle'])}."
+            ),
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.warning(f"Could not notify issuer {c['issuer_telegram_id']}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +653,9 @@ async def cmd_help(message: Message, state: FSMContext):
         "Time for UBI bot — Command Reference\n\n"
         "/start — Register and create your Handle\n"
         "/balance — Show your Daily Wallet + Time Vault\n"
+        "/coupon 2h 30m — Make a time coupon (QR + link) for someone\n"
+        "/coupons — Your coupons and what happened to them\n"
+        "/redeem <link> — Redeem a coupon you were given\n"
         "/history — Your recent transactions\n"
         "/handle — Display your Handle\n"
         "/circles — Universal Circles balances\n\n"
@@ -454,7 +672,9 @@ async def cmd_help(message: Message, state: FSMContext):
         "- Unspent Wallet time flows to Universal Circles at midnight\n"
         "- Your Vault holds time received from others (max 24h, Tier 1)\n"
         "- Wallet is spent first, then Vault if needed\n"
-        "- Sending time works with time coupons (coming next)\n\n"
+        "- You send time as a coupon: the time leaves your Wallet when you make it,\n"
+        "  whoever opens the coupon first gets it in their Vault\n"
+        "- A coupon not redeemed by its expiry flows to the Universal Circles\n\n"
         "Handle format: word:word:word (e.g., cat:chef:888)"
     )
 
@@ -1104,6 +1324,8 @@ async def daily_reset_job():
     """Scheduled job: sweep all wallets, reset to 24h, feed Universal Circles."""
     logger.info("Running daily wallet reset...")
     try:
+        # Coupons due at midnight go to the Circles before the wallet sweep.
+        await coupons.expire_due_coupons()
         results = await db.perform_daily_reset()
         total_swept = sum(r["swept"] for r in results)
         logger.info(
@@ -1138,7 +1360,12 @@ async def daily_reset_job():
 async def main():
     # Initialize database
     await db.init_db()
+    await coupons.init_coupons_schema()
     logger.info("Database initialized.")
+
+    global BOT_USERNAME
+    me = await bot.get_me()
+    BOT_USERNAME = me.username
 
     # Set up the daily reset scheduler
     scheduler = AsyncIOScheduler()
@@ -1147,6 +1374,14 @@ async def main():
         CronTrigger(hour=0, minute=0, second=0, timezone="UTC"),
         id="daily_reset",
         name="Daily Wallet Reset (midnight UTC)",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        coupons.expire_due_coupons,
+        "interval",
+        minutes=5,
+        id="coupon_expiry",
+        name="Expire due coupons to the Universal Circles",
         replace_existing=True,
     )
     scheduler.start()
