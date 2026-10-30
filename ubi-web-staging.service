@@ -1,6 +1,6 @@
 [Unit]
 Description=UBI Web app STAGING — Time for UBI (wallet, coupons)
-After=network-online.target
+After=network-online.target ubi-bot-staging.service
 Wants=network-online.target
 
 [Service]
@@ -11,8 +11,13 @@ Environment=UBI_ENV_FILE=.env.staging
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/home/salid/ubi-bot/.env.staging
 ExecStart=/home/salid/ubi-bot/.venv/bin/python /home/salid/ubi-bot/webapp.py
-Restart=on-failure
+Restart=always
 RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/salid/ubi-bot-staging /home/salid/ubi-bot
+PrivateTmp=yes
 StandardOutput=journal
 StandardError=journal
 

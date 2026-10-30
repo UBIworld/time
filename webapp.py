@@ -12,12 +12,16 @@ Telegram as a Mini App, the page posts its initData to /auth/webapp.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
 import os
 import re
+import time
+from collections import defaultdict, deque
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -34,7 +38,48 @@ WEB_DIR = Path(__file__).parent / "web"
 WEB_PORT = int(os.environ.get("WEB_PORT", "8161"))
 WEB_PUBLIC_URL = os.environ.get("WEB_PUBLIC_URL", f"http://127.0.0.1:{WEB_PORT}").rstrip("/")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "")
+if not BOT_USERNAME:
+    raise SystemExit("BOT_USERNAME is not set; coupon links would be broken")
 COOKIE = "ubi_session"
+COUPON_ID_RE = re.compile(r"[A-Za-z0-9_-]{16}")
+
+# Rate limit for the login code: per client IP, sliding window.
+CODE_ATTEMPTS = 10
+CODE_WINDOW = 600
+_code_attempts: dict[str, deque] = defaultdict(deque)
+
+
+def client_ip(request: web.Request) -> str:
+    # Behind the Cloudflare Tunnel only CF-Connecting-IP is trustworthy.
+    return request.headers.get("CF-Connecting-IP") or (request.remote or "?")
+
+
+def _rate_limited(ip: str) -> bool:
+    now = time.monotonic()
+    q = _code_attempts[ip]
+    while q and q[0] < now - CODE_WINDOW:
+        q.popleft()
+    if len(q) >= CODE_ATTEMPTS:
+        return True
+    q.append(now)
+    return False
+
+
+async def read_json(request: web.Request) -> dict:
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise web.HTTPBadRequest(text="bad json")
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="bad json")
+    return body
+
+
+def _valid_coupon_id(request: web.Request) -> str:
+    cid = request.match_info["id"]
+    if not COUPON_ID_RE.fullmatch(cid):
+        raise web.HTTPNotFound()
+    return cid
 
 
 def coupon_link(coupon_id: str) -> str:
@@ -77,10 +122,14 @@ def _set_session(resp: web.StreamResponse, telegram_id: int) -> None:
 
 
 async def auth_code(request: web.Request):
-    body = await request.json()
+    ip = client_ip(request)
+    if _rate_limited(ip):
+        return _json({"ok": False, "error": "too_many_attempts"}, 429)
+    body = await read_json(request)
     code = webauth.normalize_code(str(body.get("code", "")))
     tid = await webauth.consume_login_token(code) if len(code) == 9 else None
     if tid is None:
+        await asyncio.sleep(1.0)
         return _json({"ok": False, "error": "bad_code"}, 403)
     resp = _json({"ok": True})
     _set_session(resp, tid)
@@ -88,7 +137,7 @@ async def auth_code(request: web.Request):
 
 
 async def auth_webapp(request: web.Request):
-    body = await request.json()
+    body = await read_json(request)
     tid = webauth.verify_webapp_init_data(body.get("initData", ""))
     if tid is None:
         return _json({"ok": False, "error": "bad_init_data"}, 401)
@@ -103,6 +152,31 @@ async def logout(request: web.Request):
     raise resp
 
 
+@web.middleware
+async def security_middleware(request: web.Request, handler):
+    # Cross-site POSTs: the cookie is SameSite=Lax, and on top of that any
+    # POST carrying an Origin must come from our own origin.
+    if request.method == "POST":
+        origin = request.headers.get("Origin")
+        if origin and origin.rstrip("/") != _own_origin():
+            raise web.HTTPForbidden(text="bad origin")
+    resp = await handler(request)
+    h = resp.headers
+    h.setdefault("Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
+        "font-src 'self'; base-uri 'self'; form-action 'self'; "
+        "frame-ancestors https://web.telegram.org https://*.telegram.org")
+    h.setdefault("Referrer-Policy", "no-referrer")
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    return resp
+
+
+def _own_origin() -> str:
+    u = urlsplit(WEB_PUBLIC_URL)
+    return f"{u.scheme}://{u.netloc}"
+
+
 # ---------------------------------------------------------------------------
 # Pages
 # ---------------------------------------------------------------------------
@@ -115,9 +189,10 @@ async def index(request: web.Request):
 
 async def coupon_public_page(request: web.Request):
     """Anyone can open /c/<id>: shows the coupon and a Redeem button."""
+    cid = _valid_coupon_id(request)
     html = (WEB_DIR / "coupon.html").read_text()
     html = html.replace("__BOT_USERNAME__", BOT_USERNAME).replace(
-        "__COUPON_ID__", request.match_info["id"]
+        '"__COUPON_ID__"', json.dumps(cid)
     )
     return web.Response(text=html, content_type="text/html")
 
@@ -174,7 +249,7 @@ async def api_coupon_create(request: web.Request):
     user = await current_user(request)
     if user is None:
         return _json({"ok": False, "error": "not_logged_in"}, 401)
-    body = await request.json()
+    body = await read_json(request)
     amount = body.get("amount_seconds")
     if amount is None and body.get("amount_text"):
         amount = parse_time_input(str(body["amount_text"]))
@@ -207,7 +282,7 @@ async def api_coupon_create(request: web.Request):
 
 
 async def api_coupon_get(request: web.Request):
-    c = await coupons.get_coupon(request.match_info["id"])
+    c = await coupons.get_coupon(_valid_coupon_id(request))
     if c is None:
         return _json({"ok": False, "error": "not_found"}, 404)
     user = await current_user(request)
@@ -217,18 +292,19 @@ async def api_coupon_get(request: web.Request):
 
 
 async def api_coupon_qr(request: web.Request):
-    c = await coupons.get_coupon(request.match_info["id"])
+    c = await coupons.get_coupon(_valid_coupon_id(request))
     if c is None:
         raise web.HTTPNotFound()
+    # The image is a pure function of the id; let Cloudflare keep it.
     return web.Response(body=_qr_png(coupon_link(c["id"])), content_type="image/png",
-                        headers={"Cache-Control": "private, max-age=3600"})
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 async def api_redeem(request: web.Request):
     user = await current_user(request)
     if user is None:
         return _json({"ok": False, "error": "not_logged_in"}, 401)
-    body = await request.json()
+    body = await read_json(request)
     raw = str(body.get("code", ""))
     m = re.search(r"c_([A-Za-z0-9_-]{8,})", raw) or re.search(r"/c/([A-Za-z0-9_-]{8,})", raw)
     coupon_id = m.group(1) if m else raw.strip()
@@ -259,7 +335,7 @@ async def on_startup(app: web.Application):
 
 
 def make_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[security_middleware], client_max_size=16 * 1024)
     app.on_startup.append(on_startup)
     app.add_routes([
         web.get("/", index),

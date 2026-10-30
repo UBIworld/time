@@ -19,6 +19,7 @@ signed object is what federation v2 carries across nodes.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -83,6 +84,12 @@ def new_coupon_id() -> str:
     return secrets.token_urlsafe(12)
 
 
+def public_id(coupon_id: str) -> str:
+    """What the signed, publishable files call the coupon. The raw id is the
+    bearer secret (it is the QR); only its hash may leave the node."""
+    return "cpn_" + hashlib.sha256(coupon_id.encode()).hexdigest()[:32]
+
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -103,9 +110,14 @@ async def init_coupons_schema() -> None:
                 redeemed_by     INTEGER REFERENCES users(id),
                 redeemed_at     TEXT,
                 redeem_tx_id    INTEGER REFERENCES transactions(id),
-                expired_at      TEXT
+                expired_at      TEXT,
+                public_id       TEXT
             )
         """)
+        cursor = await db.execute("PRAGMA table_info(coupons)")
+        cols = [r[1] for r in await cursor.fetchall()]
+        if "public_id" not in cols:
+            await db.execute("ALTER TABLE coupons ADD COLUMN public_id TEXT")
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_coupons_status_expiry ON coupons(status, expires_at)"
         )
@@ -142,17 +154,23 @@ async def issue_coupon(
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # Take the write lock before reading balances: the bot and the web app
+        # are two processes on one file, and a read-then-write without the
+        # lock could mint time (two issuances from the same stale balance).
+        await db.execute("BEGIN IMMEDIATE")
         cursor = await db.execute(
             "SELECT * FROM users WHERE telegram_id = ?", (issuer_telegram_id,)
         )
         row = await cursor.fetchone()
         if row is None:
+            await db.rollback()
             return {"success": False, "error": "not_registered"}
         issuer = dict(row)
 
         wallet = issuer["daily_wallet"]
         vault = issuer["time_vault"]
         if amount > wallet + vault:
+            await db.rollback()
             return {
                 "success": False,
                 "error": "insufficient_balance",
@@ -180,17 +198,21 @@ async def issue_coupon(
             expires = min(requested, midnight) if wallet_part > 0 else requested
 
         coupon_id = new_coupon_id()
-        await db.execute(
-            "UPDATE users SET daily_wallet = ?, time_vault = ? WHERE id = ?",
-            (wallet - wallet_part, vault - vault_part, issuer["id"]),
+        cursor = await db.execute(
+            "UPDATE users SET daily_wallet = daily_wallet - ?, time_vault = time_vault - ? "
+            "WHERE id = ? AND daily_wallet >= ? AND time_vault >= ?",
+            (wallet_part, vault_part, issuer["id"], wallet_part, vault_part),
         )
+        if cursor.rowcount != 1:
+            await db.rollback()
+            return {"success": False, "error": "insufficient_balance", "available": wallet + vault}
         await db.execute(
             """
-            INSERT INTO coupons (id, issuer_id, amount, wallet_part, vault_part,
+            INSERT INTO coupons (id, public_id, issuer_id, amount, wallet_part, vault_part,
                                  lock_handle, status, issued_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'issued', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?)
             """,
-            (coupon_id, issuer["id"], amount, wallet_part, vault_part,
+            (coupon_id, public_id(coupon_id), issuer["id"], amount, wallet_part, vault_part,
              lock_handle, _sql(now), _sql(expires)),
         )
         await db.commit()
@@ -270,6 +292,7 @@ async def redeem_coupon(coupon_id: str, redeemer_telegram_id: int) -> dict:
     now = utcnow()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
         cursor = await db.execute(
             "SELECT c.*, u.handle_display AS issuer_handle, u.telegram_id AS issuer_telegram_id "
             "FROM coupons c JOIN users u ON c.issuer_id = u.id WHERE c.id = ?",
@@ -277,6 +300,7 @@ async def redeem_coupon(coupon_id: str, redeemer_telegram_id: int) -> dict:
         )
         row = await cursor.fetchone()
         if row is None:
+            await db.rollback()
             return {"success": False, "error": "not_found"}
         coupon = dict(row)
 
@@ -284,46 +308,51 @@ async def redeem_coupon(coupon_id: str, redeemer_telegram_id: int) -> dict:
             "SELECT * FROM users WHERE telegram_id = ?", (redeemer_telegram_id,)
         )
         row = await cursor.fetchone()
-        if row is None:
-            return {"success": False, "error": "not_registered", "coupon": coupon}
-        redeemer = dict(row)
+        redeemer = dict(row) if row else None
 
-        if coupon["status"] != STATUS_ISSUED:
-            return {"success": False, "error": coupon["status"], "coupon": coupon}
-        if _from_sql(coupon["expires_at"]) <= now:
-            return {"success": False, "error": "expired", "coupon": coupon}
-        if redeemer["id"] == coupon["issuer_id"]:
+        err = None
+        if redeemer is None:
+            err = "not_registered"
+        elif coupon["status"] != STATUS_ISSUED:
+            err = coupon["status"]
+        elif _from_sql(coupon["expires_at"]) <= now:
+            err = "expired"
+        elif redeemer["id"] == coupon["issuer_id"]:
             # Self-redemption would turn a Wallet coupon into a Vault deposit.
-            return {"success": False, "error": "own_coupon", "coupon": coupon}
-        if coupon["lock_handle"] and coupon["lock_handle"] != redeemer["handle_display"]:
-            return {"success": False, "error": "locked", "coupon": coupon}
+            err = "own_coupon"
+        elif coupon["lock_handle"] and coupon["lock_handle"] != redeemer["handle_display"]:
+            err = "locked"
+        if err:
+            await db.rollback()
+            return {"success": False, "error": err, "coupon": coupon}
 
         amount = coupon["amount"]
-        new_vault = redeemer["time_vault"] + amount
-        overflow = 0
-        if new_vault > redeemer["vault_capacity"]:
-            overflow = new_vault - redeemer["vault_capacity"]
-            new_vault = redeemer["vault_capacity"]
-
         cursor = await db.execute(
             "UPDATE coupons SET status = 'redeemed', redeemed_by = ?, redeemed_at = ? "
-            "WHERE id = ? AND status = 'issued'",
-            (redeemer["id"], _sql(now), coupon_id),
+            "WHERE id = ? AND status = 'issued' AND expires_at > ?",
+            (redeemer["id"], _sql(now), coupon_id, _sql(now)),
         )
         if cursor.rowcount != 1:
             await db.rollback()
             return {"success": False, "error": "redeemed", "coupon": coupon}
 
-        await db.execute(
-            "UPDATE users SET time_vault = ? WHERE id = ?", (new_vault, redeemer["id"])
+        # Credit the Vault atomically against its cap; overflow goes to the Circles.
+        cursor = await db.execute(
+            "UPDATE users SET time_vault = MIN(vault_capacity, time_vault + ?) "
+            "WHERE id = ? RETURNING time_vault, vault_capacity",
+            (amount, redeemer["id"]),
         )
+        vrow = await cursor.fetchone()
+        new_vault = vrow[0]
+        credited = new_vault - redeemer["time_vault"]
+        overflow = amount - credited
         if overflow > 0:
             await _credit_circles(db, overflow)
 
         cursor = await db.execute(
             "INSERT INTO transactions (sender_id, recipient_id, amount, wallet_part, vault_part) "
             "VALUES (?, ?, ?, ?, ?)",
-            (coupon["issuer_id"], redeemer["id"], amount, coupon["wallet_part"], coupon["vault_part"]),
+            (coupon["issuer_id"], redeemer["id"], credited, coupon["wallet_part"], coupon["vault_part"]),
         )
         tx_id = cursor.lastrowid
         await db.execute(
@@ -343,10 +372,21 @@ async def redeem_coupon(coupon_id: str, redeemer_telegram_id: int) -> dict:
         tx_type="coupon_redeem",
         from_handle=coupon["issuer_handle"],
         to_handle=redeemer["handle_display"],
-        amount=amount,
+        amount=credited,
         created_at=_sql(now),
         coupon_id=coupon_id,
     )
+    if overflow > 0:
+        _write_ledger_tx(
+            tx_id=None,
+            tx_type="coupon_overflow",
+            from_handle=coupon["issuer_handle"],
+            to_handle="universal:circles:all",
+            amount=overflow,
+            created_at=_sql(now),
+            coupon_id=coupon_id,
+            suffix="ovf",
+        )
     _write_signed_coupon_status(coupon)
     return {
         "success": True,
@@ -371,6 +411,7 @@ async def expire_due_coupons() -> list[dict]:
     expired: list[dict] = []
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
         cursor = await db.execute(
             "SELECT c.*, u.handle_display AS issuer_handle, u.telegram_id AS issuer_telegram_id "
             "FROM coupons c JOIN users u ON c.issuer_id = u.id "
@@ -438,7 +479,7 @@ def build_coupon_object(coupon: dict) -> dict:
     expires = coupon["expires_at"]
     return {
         "coupon_format_version": COUPON_FORMAT_VERSION,
-        "id": f"cpn_{coupon['id']}",
+        "id": public_id(coupon["id"]),
         "type": "coupon",
         "issuer_handle": coupon["issuer_handle"],
         "issuer_node": config.LOCAL_NODE_DOMAIN,
@@ -466,7 +507,7 @@ def _write_signed_coupon(coupon: dict) -> Optional[dict]:
         return None
     try:
         obj = build_coupon_object(coupon)
-        _sign_and_write(obj, d / f"cpn_{coupon['id']}.json")
+        _sign_and_write(obj, d / f"{obj['id']}.json")
         return obj
     except Exception as exc:
         logger.error("Could not write signed coupon %s: %s", coupon["id"], exc)
@@ -481,9 +522,9 @@ def _write_signed_coupon_status(coupon: dict) -> None:
     try:
         obj = {
             "coupon_format_version": COUPON_FORMAT_VERSION,
-            "id": f"cpn_{coupon['id']}.{coupon['status']}",
+            "id": f"{public_id(coupon['id'])}.{coupon['status']}",
             "type": f"coupon_{coupon['status']}",
-            "coupon_id": f"cpn_{coupon['id']}",
+            "coupon_id": public_id(coupon["id"]),
             "issuer_handle": coupon["issuer_handle"],
             "amount_seconds": int(coupon["amount"]),
             "redeemer_handle": coupon.get("redeemer_handle"),
@@ -503,16 +544,18 @@ def _write_ledger_tx(
     amount: int,
     created_at: str,
     coupon_id: str,
+    suffix: str = "exp",
 ) -> None:
     """Mirror a coupon outcome into the public transactions ledger."""
     if _ledger is None or not config.LEDGER_ROOT:
         return
     try:
+        pid = public_id(coupon_id)
         entry = {
             "ledger_format_version": _ledger.LEDGER_FORMAT_VERSION,
-            "id": f"tx_{tx_id:08d}" if tx_id is not None else f"cpx_{coupon_id}",
+            "id": f"tx_{tx_id:08d}" if tx_id is not None else f"{pid}.{suffix}",
             "type": tx_type,
-            "coupon_id": f"cpn_{coupon_id}",
+            "coupon_id": pid,
             "from_handle": from_handle,
             "to_handle": to_handle,
             "from_node": config.LOCAL_NODE_DOMAIN,

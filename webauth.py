@@ -37,14 +37,21 @@ WEBAPP_INITDATA_MAX_AGE = 86400    # Telegram initData older than this is refuse
 # Secret
 # ---------------------------------------------------------------------------
 
+_SECRET: Optional[bytes] = None
+
+
 def _secret() -> bytes:
+    global _SECRET
+    if _SECRET is not None:
+        return _SECRET
     d = Path(config.NODE_KEY_DIR).expanduser()
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     p = d / "web_session_secret"
     if not p.exists():
         p.write_bytes(secrets.token_bytes(32))
         os.chmod(p, 0o600)
-    return p.read_bytes()
+    _SECRET = p.read_bytes()
+    return _SECRET
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +82,8 @@ def _new_code() -> str:
 
 
 def normalize_code(text: str) -> str:
-    t = "".join(ch for ch in text.upper() if ch.isalnum())
+    # 0/O and 1/I are not in the alphabet; map the look-alikes people type.
+    t = "".join(ch for ch in text.upper() if ch.isalnum()).replace("0", "O").replace("1", "I")
     return f"{t[:4]}-{t[4:8]}" if len(t) >= 8 else t
 
 

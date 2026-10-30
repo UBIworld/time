@@ -9,57 +9,84 @@
 <link rel="stylesheet" href="/static/app.css">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
-<body>
+<body class="coupon-page">
+<div class="stripe"></div>
 <div class="topbar">
-  <a href="/" style="display:contents"><img src="/static/flag.png" alt=""><span class="brand">Time for UBI</span></a>
+  <a href="/"><img src="/static/flag.png" alt=""><span class="brand">Time for UBI</span></a>
 </div>
 <main>
-  <section class="card center">
-    <h2>Time coupon</h2>
-    <div class="big" id="amount">…</div>
-    <p id="from" class="hint"></p>
-    <div class="qr" id="qr" hidden><img id="qrImg" alt="Coupon QR"><div class="link" id="link"></div></div>
-    <p class="msg" id="status"></p>
-    <div class="row" style="justify-content:center;margin-top:1rem">
-      <button id="redeemBtn" hidden>Redeem into my Vault</button>
-      <a id="tgBtn" hidden><button type="button" class="secondary">Open in Telegram</button></a>
+  <div class="ticket">
+    <div class="stripe"></div>
+    <div class="ticket-body">
+      <div class="ticket-kicker">Time coupon</div>
+      <div class="amount num" id="amount">…</div>
+      <p class="ticket-from" id="from"></p>
+      <div id="qr" hidden><img class="qr" id="qrImg" alt="QR code of this coupon"><div class="link" id="link"></div></div>
+      <p class="status msg" id="status"></p>
+      <button class="btn" id="redeemBtn" hidden>Receive it into my Vault</button>
+      <a class="btn" id="tgBtn" hidden>Open in Telegram to receive it</a>
+      <p class="hint" id="help"></p>
     </div>
-    <p class="hint" id="help"></p>
-  </section>
+  </div>
 </main>
 <script>
 const $ = id => document.getElementById(id);
 const ID = "__COUPON_ID__";
+const pad = n => String(n).padStart(2, '0');
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function parseUTC(s){ const m = /^(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d)/.exec(s || ''); return m ? Date.UTC(+m[1], m[2]-1, +m[3], +m[4], +m[5]) : null; }
+function sayWhen(s){
+  const t = parseUTC(s); if (t === null) return s || '';
+  const d = new Date(t), now = new Date();
+  if (t === Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)) return 'midnight UTC tonight';
+  const year = d.getUTCFullYear() === now.getUTCFullYear() ? '' : ` ${d.getUTCFullYear()}`;
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}${year}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
+}
 async function api(path, body){
   const r = await fetch(path, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {});
   return r.json();
 }
+function setFrom(handle){ $('from').textContent = ''; $('from').append('from '); const s = document.createElement('span'); s.className = 'mono'; s.textContent = handle || ''; $('from').append(s); }
+
 async function load(){
   const tg = window.Telegram && window.Telegram.WebApp;
   if (tg && tg.initData) { tg.ready(); await api('/auth/webapp', {initData: tg.initData}); }
   const r = await api('/api/coupon/' + ID);
-  if (!r.ok) { $('amount').textContent = '—'; $('status').textContent = 'This coupon does not exist.'; return; }
+  if (!r.ok) { $('amount').textContent = '—'; $('status').textContent = 'There is no coupon at this address.'; $('help').innerHTML = '<a href="/">Go to your wallet</a>'; return; }
   const c = r.coupon;
   $('amount').textContent = c.amount_text;
-  $('from').textContent = 'from ' + c.issuer_handle;
+  setFrom(c.issuer_handle);
   $('tgBtn').href = c.link;
   if (c.status === 'issued') {
     $('qr').hidden = false; $('qrImg').src = '/api/coupon/' + ID + '/qr.png'; $('link').textContent = c.link;
-    $('status').textContent = 'Open until ' + c.expires_at.slice(0,16) + ' UTC.';
-    if (c.is_mine) { $('help').textContent = 'This is your coupon. Share the QR or the link; it cannot come back to you.'; }
-    else if (r.logged_in) { $('redeemBtn').hidden = false; }
-    else { $('tgBtn').hidden = false; $('help').textContent = 'Open it in Telegram to receive the time. No handle yet? The bot creates one for you.'; }
+    $('status').innerHTML = 'Can be opened until <strong>' + sayWhen(c.expires_at) + '</strong>.';
+    if (c.is_mine) { $('help').textContent = 'This is your coupon. Show the code or send the link; the first person to open it receives the time.'; }
+    else if (r.logged_in) { $('redeemBtn').hidden = false; $('help').textContent = 'The time goes into your Time Vault.'; }
+    else { $('tgBtn').hidden = false; $('help').textContent = 'No handle yet? Telegram opens the bot and it makes one for you.'; }
   } else if (c.status === 'redeemed') {
-    $('status').textContent = 'Already redeemed by ' + c.redeemer_handle + '.';
+    $('status').textContent = 'Already opened by ' + (c.redeemer_handle || 'someone') + '.';
+    $('help').textContent = 'A coupon can be received once.';
   } else {
-    $('status').textContent = 'Expired at ' + c.expires_at.slice(0,16) + ' UTC. Its time flowed to the Universal Circles.';
+    $('status').textContent = 'This coupon ran out of time on ' + sayWhen(c.expires_at) + '.';
+    $('help').textContent = 'What it held went to the Universal Circles.';
   }
 }
 $('redeemBtn').addEventListener('click', async () => {
   $('redeemBtn').disabled = true;
   const r = await api('/api/redeem', {code: ID});
-  if (r.ok) { $('status').className = 'msg ok'; $('status').textContent = `You received ${r.amount_text} from ${r.from}. Your Vault: ${r.vault_text}.`; $('redeemBtn').hidden = true; $('qr').hidden = true; $('help').innerHTML = '<a href="/">Back to your wallet</a>'; }
-  else { $('status').className = 'msg err'; $('status').textContent = r.error === 'own_coupon' ? 'That is your own coupon.' : 'Could not redeem (' + r.error + ').'; $('redeemBtn').disabled = false; }
+  if (r.ok) {
+    $('status').className = 'status msg ok'; $('status').textContent = `You received ${r.amount_text} from ${r.from}. Your Vault now holds ${r.vault_text}.`;
+    $('redeemBtn').hidden = true; $('qr').hidden = true; $('help').innerHTML = '<a href="/">Back to your wallet</a>';
+  } else {
+    $('status').className = 'status msg err';
+    $('status').textContent = ({
+      own_coupon: 'This is your own coupon. Time you give cannot come back to you.',
+      redeemed: 'Someone already opened this coupon.',
+      expired: 'This coupon ran out of time. What it held went to the Universal Circles.',
+      locked: 'This coupon was made for a different handle.'
+    })[r.error] || 'The coupon could not be received. Please try again.';
+    $('redeemBtn').disabled = false;
+  }
 });
 load();
 </script>
