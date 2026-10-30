@@ -38,7 +38,7 @@ import signing
 
 logger = logging.getLogger("ubi-bot.ledger")
 
-LEDGER_FORMAT_VERSION = "1.0"
+LEDGER_FORMAT_VERSION = "1.1"  # 1.1: blue_pct dropped (one kind of time, 2026-10-30)
 TX_TYPE_TRANSFER = "transfer"
 
 
@@ -80,7 +80,6 @@ def build_local_transaction_entry(
     sender_handle: str,
     recipient_handle: str,
     amount_seconds: int,
-    blue_pct: int,
     created_at: str,
     node_domain: Optional[str] = None,
 ) -> dict:
@@ -102,7 +101,6 @@ def build_local_transaction_entry(
         "from_node": node_domain,
         "to_node": node_domain,
         "amount_seconds": int(amount_seconds),
-        "blue_pct": int(blue_pct),
         "timestamp_iso": _to_iso_utc(created_at),
     }
 
@@ -138,7 +136,6 @@ def write_local_transaction_to_ledger(
     sender_handle: str,
     recipient_handle: str,
     amount_seconds: int,
-    blue_pct: int,
     created_at: str,
     ledger_root: Optional[str] = None,
 ) -> Optional[Path]:
@@ -160,7 +157,6 @@ def write_local_transaction_to_ledger(
             sender_handle=sender_handle,
             recipient_handle=recipient_handle,
             amount_seconds=amount_seconds,
-            blue_pct=blue_pct,
             created_at=created_at,
         )
         path = sign_and_write_entry(entry, root)
@@ -196,7 +192,6 @@ def backfill_local_transactions(db_path: str, ledger_root: str) -> dict:
         """
         SELECT t.id          AS tx_id,
                t.amount      AS amount,
-               t.blue_pct    AS blue_pct,
                t.created_at  AS created_at,
                s.handle_display AS sender_handle,
                r.handle_display AS recipient_handle
@@ -220,7 +215,6 @@ def backfill_local_transactions(db_path: str, ledger_root: str) -> dict:
             sender_handle=row["sender_handle"],
             recipient_handle=row["recipient_handle"],
             amount_seconds=row["amount"],
-            blue_pct=row["blue_pct"],
             created_at=row["created_at"],
         )
         sign_and_write_entry(entry, root)

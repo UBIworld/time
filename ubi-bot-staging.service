@@ -1,0 +1,20 @@
+[Unit]
+Description=UBI Bot STAGING (@timeubi_stagingbot) — Time for UBI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=salid
+WorkingDirectory=/home/salid/ubi-bot
+Environment=UBI_ENV_FILE=.env.staging
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/salid/ubi-bot/.env.staging
+ExecStart=/home/salid/ubi-bot/.venv/bin/python /home/salid/ubi-bot/bot.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -159,25 +159,6 @@ def parse_time_input(text: str) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# Blue/Red feedback parsing
-# ---------------------------------------------------------------------------
-
-def parse_blue_pct(text: str) -> int | None:
-    """
-    Parse blue percentage from send command.
-    Accepts: "blue:80", "blue:100", "blue:0"
-    Returns integer 0-100, or None if not found / invalid.
-    """
-    match = re.search(r'blue\s*:\s*(\d+)', text.lower())
-    if match:
-        pct = int(match.group(1))
-        if 0 <= pct <= 100:
-            return pct
-        return None  # invalid range
-    return None  # not specified — caller should default to 100
-
-
-# ---------------------------------------------------------------------------
 # Handle format validation
 # ---------------------------------------------------------------------------
 
@@ -219,69 +200,3 @@ def time_until_midnight_utc() -> int:
     )
     delta = tomorrow - now
     return int(delta.total_seconds())
-
-
-# ---------------------------------------------------------------------------
-# Send command parsing
-# ---------------------------------------------------------------------------
-
-def parse_send_command(text: str) -> dict | None:
-    """
-    Parse the /send command arguments.
-    Formats:
-      /send @username 2h 30m
-      /send @username 2h 30m blue:80
-      /send ++[a][b][c]++ 1h
-      /send ++[a][b][c]++ 1h blue:50
-
-    Returns dict with keys: recipient, amount_seconds, blue_pct
-    Or None if parsing fails.
-    """
-    text = text.strip()
-
-    # Remove the /send prefix if present
-    if text.lower().startswith("/send"):
-        text = text[5:].strip()
-
-    if not text:
-        return None
-
-    recipient = None
-    rest = text
-
-    # Try to match @username first
-    at_match = re.match(r'@(\w+)\s+(.*)', text)
-    if at_match:
-        recipient = "@" + at_match.group(1)
-        rest = at_match.group(2)
-    else:
-        # Try to match handle format slot1:slot2:slot3 with optional @domain
-        # (federation parsing only — federated send isn't implemented yet).
-        handle_match = re.match(
-            r'((?:[^:\s@]+):(?:[^:\s@]+):(?:[^:\s@]+)(?:@[a-zA-Z0-9.-]+)?)\s+(.*)',
-            text,
-        )
-        if handle_match:
-            recipient = handle_match.group(1)
-            rest = handle_match.group(2)
-        else:
-            return None
-
-    # Parse time amount from the rest
-    # First, separate out blue:XX if present
-    blue_pct = 100  # default
-    blue_val = parse_blue_pct(rest)
-    if blue_val is not None:
-        blue_pct = blue_val
-        # Remove the blue:XX from rest before parsing time
-        rest = re.sub(r'blue\s*:\s*\d+', '', rest).strip()
-
-    amount = parse_time_input(rest)
-    if amount is None:
-        return None
-
-    return {
-        "recipient": recipient,
-        "amount_seconds": amount,
-        "blue_pct": blue_pct,
-    }

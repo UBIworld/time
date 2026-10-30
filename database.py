@@ -68,6 +68,8 @@ async def init_db():
                 amount          INTEGER NOT NULL,
                 wallet_part     INTEGER NOT NULL DEFAULT 0,
                 vault_part      INTEGER NOT NULL DEFAULT 0,
+                -- blue_pct: legacy column, kept so old rows stay readable;
+                -- one kind of time since 2026-10-30 (issue 01)
                 blue_pct        INTEGER NOT NULL DEFAULT 100,
                 created_at      TEXT NOT NULL DEFAULT (datetime('now'))
             )
@@ -283,7 +285,6 @@ async def execute_transfer(
     sender_telegram_id: int,
     recipient_telegram_id: int,
     amount: int,
-    blue_pct: int = 100,
 ) -> dict:
     """
     Execute a time transfer from sender to recipient.
@@ -356,10 +357,10 @@ async def execute_transfer(
         # mirror the row to the public ledger without a second query.
         cursor = await db.execute(
             """
-            INSERT INTO transactions (sender_id, recipient_id, amount, wallet_part, vault_part, blue_pct)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO transactions (sender_id, recipient_id, amount, wallet_part, vault_part)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (sender["id"], recipient["id"], amount, wallet_part, vault_part, blue_pct),
+            (sender["id"], recipient["id"], amount, wallet_part, vault_part),
         )
         tx_id = cursor.lastrowid
         cursor = await db.execute(
@@ -379,8 +380,6 @@ async def execute_transfer(
         "amount": amount,
         "wallet_part": wallet_part,
         "vault_part": vault_part,
-        "blue_pct": blue_pct,
-        "red_pct": 100 - blue_pct,
         "sender_wallet_remaining": new_sender_wallet,
         "sender_vault_remaining": new_sender_vault,
         "recipient_vault_new": new_recipient_vault,
@@ -507,62 +506,6 @@ async def get_pool_balance() -> int:
 
 # Active circles in display order — used by /circles command and any future UI.
 CIRCLE_KEYS = ("health", "food", "home", "nature", "learn")
-
-
-async def get_blue_red_breakdown(telegram_id: int) -> dict | None:
-    """
-    Sum blue_seconds and red_seconds across all transfers received by this user.
-    Returns dict with total_blue, total_red, total_seconds, blue_pct (float),
-    or None if the user has no received transfers.
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-
-        # Resolve user id
-        cursor = await db.execute(
-            "SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)
-        )
-        row = await cursor.fetchone()
-        if row is None:
-            return None
-        user_id = row["id"]
-
-        # Fetch all received transactions; compute blue/red per row in Python
-        # so we stay in integer arithmetic (blue_pct stored as 0-100 integer).
-        cursor = await db.execute(
-            """
-            SELECT amount, blue_pct
-            FROM transactions
-            WHERE recipient_id = ?
-            """,
-            (user_id,),
-        )
-        rows = await cursor.fetchall()
-
-    if not rows:
-        return None
-
-    total_blue = 0
-    total_red = 0
-    for r in rows:
-        amount = r["amount"]
-        bp = r["blue_pct"]
-        # Integer math: blue_seconds = amount * blue_pct // 100,
-        # red_seconds = amount - blue_seconds  (no rounding drift).
-        blue = amount * bp // 100
-        red = amount - blue
-        total_blue += blue
-        total_red += red
-
-    total = total_blue + total_red
-    blue_pct = (total_blue / total * 100) if total > 0 else 0.0
-
-    return {
-        "total_blue": total_blue,
-        "total_red": total_red,
-        "total_seconds": total,
-        "blue_pct": blue_pct,
-    }
 
 
 async def get_circles_balances() -> list[dict]:

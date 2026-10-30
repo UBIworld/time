@@ -11,7 +11,6 @@ Run: python bot.py
 import asyncio
 import logging
 import os
-import re
 import sys
 from datetime import datetime, timezone
 
@@ -41,7 +40,7 @@ from wallet import (
     time_until_midnight_utc,
     parse_time_input,
 )
-# Ledger MVP: signed JSON mirror of each transaction lands on disk for
+# Ledger: signed JSON mirror of each transaction lands on disk for
 # ubi.world to render. Import is best-effort — if pynacl isn't installed
 # we degrade to "no ledger" without breaking the bot.
 try:
@@ -79,9 +78,8 @@ dp.include_router(router)
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="/balance"), KeyboardButton(text="/send")],
-        [KeyboardButton(text="/history"), KeyboardButton(text="/circles")],
-        [KeyboardButton(text="/blue"),    KeyboardButton(text="/handle")],
+        [KeyboardButton(text="/balance"), KeyboardButton(text="/history")],
+        [KeyboardButton(text="/circles"), KeyboardButton(text="/handle")],
         [KeyboardButton(text="/cc"),      KeyboardButton(text="/create")],
         [KeyboardButton(text="/help")],
     ],
@@ -99,23 +97,6 @@ class Registration(StatesGroup):
     waiting_slot2 = State()
     waiting_slot3 = State()
     confirming = State()
-
-
-class Send(StatesGroup):
-    # Handle collection (3 parts)
-    waiting_handle_part1    = State()
-    waiting_handle_part2    = State()
-    waiting_handle_part3    = State()
-    confirming_handle       = State()
-    # Time collection (HH:MM:SS)
-    waiting_hours           = State()
-    waiting_minutes         = State()
-    waiting_seconds         = State()
-    confirming_time         = State()
-    # Blue percentage
-    waiting_blue            = State()
-    # Final confirmation
-    confirming_send         = State()
 
 
 class CreateCircle(StatesGroup):
@@ -148,86 +129,8 @@ def mono(handle: str) -> str:
     return f"`{handle}`"
 
 
-# ---------------------------------------------------------------------------
-# Helper: inline keyboards for FSM confirmations (Fix 3)
-# ---------------------------------------------------------------------------
-
-def _handle_confirm_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Yes", callback_data="handle_yes"),
-        InlineKeyboardButton(text="Restart Handle", callback_data="handle_restart"),
-    ]])
-
-
-def _time_confirm_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Yes", callback_data="time_yes"),
-        InlineKeyboardButton(text="Restart Time", callback_data="time_restart"),
-    ]])
-
-
-def _send_confirm_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Confirm", callback_data="send_confirm"),
-        InlineKeyboardButton(text="Restart Blue", callback_data="send_restart_blue"),
-    ]])
-
-
-# ---------------------------------------------------------------------------
-# Shared helper: pre-fill a handle and jump straight to time-entry step
-# Used by Feature 1 (Send Again), Feature 2 (Nudge), Feature 4 (Reply-to-Send)
-# ---------------------------------------------------------------------------
-
-async def _prefill_handle_and_go_to_time(
-    message_or_callback_msg,
-    state: FSMContext,
-    handle_display: str,
-    sender_tg_id: int,
-) -> None:
-    """
-    Store handle parts in FSM data and transition to waiting_hours.
-    `message_or_callback_msg` is the Message object to reply to.
-    Validates that the handle still exists and is not a self-send.
-    """
-    recipient = await db.get_user_by_handle(handle_display)
-    if not recipient:
-        await message_or_callback_msg.answer(
-            f"Handle {mono(handle_display)} no longer exists. "
-            "Use /send to pick a new recipient.",
-            parse_mode="Markdown",
-        )
-        await state.clear()
-        return
-
-    if recipient["telegram_id"] == sender_tg_id:
-        await message_or_callback_msg.answer(
-            "You cannot send time to yourself. Use /send to pick a different handle."
-        )
-        await state.clear()
-        return
-
-    # Split handle_display back into its three slots so the rest of the FSM
-    # (cb_send_confirm, send_blue, etc.) can reconstruct the full handle normally.
-    # Format is always  slot1:slot2:slot3  (post-2026-05-21 — no :: delimiters).
-    # We strip an optional @domain suffix in case a federated handle ever
-    # arrives here through the recent-recipient path.
-    bare = handle_display.split("@", 1)[0]
-    parts = bare.split(":", 2)   # exactly 3 parts
-
-    await state.update_data(
-        sender_tg_id=sender_tg_id,
-        handle_part_1=parts[0],
-        handle_part_2=parts[1],
-        handle_part_3=parts[2],
-    )
-    await state.set_state(Send.waiting_hours)
-    await message_or_callback_msg.answer(
-        f"Sending to {mono(handle_display)}.\n\n"
-        "You will be prompted to enter 3 parts of the transaction amount "
-        "corresponding to HH:MM:SS\n"
-        "How many Hours?",
-        parse_mode="Markdown",
-    )
+def _is_cancel(text: str) -> bool:
+    return text.strip().lower() in ("cancel", "/cancel")
 
 
 # ---------------------------------------------------------------------------
@@ -454,516 +357,8 @@ async def cmd_circles(message: Message, state: FSMContext):
 
 
 # ---------------------------------------------------------------------------
-# /send — Transfer time (conversational FSM, UBI handles only)
+# /history — Transaction history
 # ---------------------------------------------------------------------------
-
-async def _do_transfer(message: Message, sender: dict, recipient: dict, amount: int, blue_pct: int) -> bool:
-    """
-    Execute the transfer and send confirmations to both parties.
-    Returns True on success, False on failure (error already sent to user).
-    """
-    # Block self-send
-    if recipient["telegram_id"] == sender["telegram_id"]:
-        await message.answer(
-            "You cannot send time to yourself. "
-            "Self-deposit is not allowed in the UBI system — "
-            "your Vault only grows when others send you time."
-        )
-        return False
-
-    if amount < 1:
-        await message.answer("Minimum transfer is 1 second.")
-        return False
-
-    result = await db.execute_transfer(
-        sender_telegram_id=sender["telegram_id"],
-        recipient_telegram_id=recipient["telegram_id"],
-        amount=amount,
-        blue_pct=blue_pct,
-    )
-
-    if not result["success"]:
-        if result["error"] == "insufficient_balance":
-            await message.answer(
-                f"Insufficient balance.\n"
-                f"You tried to send {format_time(amount)} but only have "
-                f"{format_time(result['available'])} available "
-                f"(Wallet + Vault combined)."
-            )
-        return False
-
-    # Mirror this transaction to the public ledger at ubi.world.
-    # The DB write has already committed — if the ledger write fails
-    # we log and continue. The ledger is never the source of truth.
-    if _ledger is not None and result.get("tx_id") is not None:
-        _ledger.write_local_transaction_to_ledger(
-            tx_id=result["tx_id"],
-            sender_handle=result["sender_handle"],
-            recipient_handle=result["recipient_handle"],
-            amount_seconds=result["amount"],
-            blue_pct=result["blue_pct"],
-            created_at=result["created_at"],
-        )
-
-    # Build source description
-    source_parts = []
-    if result["wallet_part"] > 0:
-        source_parts.append(f"{format_time(result['wallet_part'])} from Wallet")
-    if result["vault_part"] > 0:
-        source_parts.append(f"{format_time(result['vault_part'])} from Vault")
-    source_desc = " + ".join(source_parts)
-
-    # Feedback description
-    blue = result["blue_pct"]
-    red = result["red_pct"]
-    if blue == 100:
-        feedback = "🟦  Blue Time  100%"
-    elif red == 100:
-        feedback = "🟥  Red Time  100%"
-    else:
-        feedback = f"🟦  Blue Time  {blue}%  /  🟥  Red Time  {red}%"
-
-    overflow_note = ""
-    if result["overflow"] > 0:
-        overflow_note = (
-            f"\n(Note: {format_time(result['overflow'])} exceeded recipient's Vault capacity "
-            f"and flowed to Universal Circles)"
-        )
-
-    await message.answer(
-        f"📤 Sent! {format_time(amount)} to {mono(recipient['handle_display'])} ({feedback})\n"
-        f"Source: {source_desc}\n\n"
-        f"Your remaining balance:\n"
-        f"  Wallet: {format_time(result['sender_wallet_remaining'])}\n"
-        f"  Vault:  {format_time(result['sender_vault_remaining'])}"
-        f"{overflow_note}",
-        parse_mode="Markdown",
-    )
-
-    try:
-        await bot.send_message(
-            chat_id=recipient["telegram_id"],
-            text=(
-                f"🎁 You received {format_time(amount)} from {mono(sender['handle_display'])} ({feedback})\n\n"
-                f"Your Time Vault: {format_time(result['recipient_vault_new'])}"
-                f"{overflow_note}"
-            ),
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        logger.warning(f"Could not notify recipient {recipient['telegram_id']}: {e}")
-
-    return True
-
-
-def _is_cancel(text: str) -> bool:
-    return text.strip().lower() in ("cancel", "/cancel")
-
-
-# --- Step 1: /send entry point ---
-
-def _recent_recipients_keyboard(handles: list[str]) -> InlineKeyboardMarkup:
-    """Build the contextual nudge keyboard: one button per recent recipient plus
-    a manual-entry escape hatch at the bottom."""
-    rows = []
-    for h in handles:
-        rows.append([InlineKeyboardButton(
-            text=h,
-            callback_data=f"send_recent:{h}",
-        )])
-    rows.append([InlineKeyboardButton(
-        text="Enter handle",
-        callback_data="send_recent_manual",
-    )])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-@router.message(Command("send"), StateFilter("*"))
-async def cmd_send(message: Message, state: FSMContext):
-    await state.clear()
-    sender = await db.get_user(message.from_user.id)
-    if not sender:
-        await message.answer("You're not registered yet. Type /start to begin.")
-        return
-
-    await state.update_data(sender_tg_id=sender["telegram_id"])
-
-    # Feature 2 — Contextual Nudge: show recent recipients if any exist
-    recent = await db.get_recent_recipients(message.from_user.id, limit=3)
-    if recent:
-        await message.answer(
-            "Who do you want to send time to?\n"
-            "Pick a recent recipient or enter a handle manually:",
-            reply_markup=_recent_recipients_keyboard(recent),
-        )
-        await state.set_state(Send.waiting_handle_part1)
-        # State stays at waiting_handle_part1 so the normal text path still works
-        # if the user ignores the keyboard and types directly.
-        return
-
-    # No history — go straight to handle entry as before
-    await message.answer(
-        "You will be prompted to enter 3 parts of the recipient handle "
-        "(format: slot1:slot2:slot3)\n"
-        "What's the 1st part of the recipient?"
-    )
-    await state.set_state(Send.waiting_handle_part1)
-
-
-# --- Feature 2 callbacks: recent-recipient buttons on /send nudge ---
-
-@router.callback_query(Send.waiting_handle_part1, F.data.startswith("send_recent:"))
-async def cb_send_recent_pick(callback: CallbackQuery, state: FSMContext):
-    """User tapped a recent-recipient button — jump straight to time entry."""
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    handle_display = callback.data[len("send_recent:"):]
-    data = await state.get_data()
-    sender_tg_id = data.get("sender_tg_id", callback.from_user.id)
-    await _prefill_handle_and_go_to_time(callback.message, state, handle_display, sender_tg_id)
-
-
-@router.callback_query(Send.waiting_handle_part1, F.data == "send_recent_manual")
-async def cb_send_recent_manual(callback: CallbackQuery, state: FSMContext):
-    """User tapped 'Enter handle' — fall through to the normal 3-part handle flow."""
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(
-        "You will be prompted to enter 3 parts of the recipient handle "
-        "(format: slot1:slot2:slot3)\n"
-        "What's the 1st part of the recipient?"
-    )
-    # State remains waiting_handle_part1 — text handler takes over from here
-
-
-# --- Step 1 handler: handle part 1 ---
-
-@router.message(Send.waiting_handle_part1, ~F.text.startswith("/"))
-async def send_handle_part1(message: Message, state: FSMContext):
-    if _is_cancel(message.text):
-        await state.clear()
-        await message.answer("Transaction cancelled.")
-        return
-
-    part = message.text.strip()
-    await state.update_data(handle_part_1=part)
-    await message.answer("What's the 2nd part of the recipient?")
-    await state.set_state(Send.waiting_handle_part2)
-
-
-# --- Step 2 handler: handle part 2 ---
-
-@router.message(Send.waiting_handle_part2, ~F.text.startswith("/"))
-async def send_handle_part2(message: Message, state: FSMContext):
-    if _is_cancel(message.text):
-        await state.clear()
-        await message.answer("Transaction cancelled.")
-        return
-
-    part = message.text.strip()
-    await state.update_data(handle_part_2=part)
-    await message.answer("What's the 3rd part of the recipient?")
-    await state.set_state(Send.waiting_handle_part3)
-
-
-# --- Step 3 handler: handle part 3 — shows inline confirm keyboard ---
-
-@router.message(Send.waiting_handle_part3, ~F.text.startswith("/"))
-async def send_handle_part3(message: Message, state: FSMContext):
-    if _is_cancel(message.text):
-        await state.clear()
-        await message.answer("Transaction cancelled.")
-        return
-
-    part = message.text.strip()
-    await state.update_data(handle_part_3=part)
-    data = await state.get_data()
-    p1, p2, p3 = data["handle_part_1"], data["handle_part_2"], part
-    handle_preview = build_handle(p1, p2, p3)
-    await message.answer(
-        f"Is the handle {mono(handle_preview)}?",
-        parse_mode="Markdown",
-        reply_markup=_handle_confirm_keyboard(),
-    )
-    await state.set_state(Send.confirming_handle)
-
-
-# --- Step 4 callback: confirm handle via inline button ---
-
-@router.callback_query(Send.confirming_handle, F.data == "handle_yes")
-async def cb_handle_yes(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    # Validate handle exists in DB
-    data = await state.get_data()
-    p1, p2, p3 = data["handle_part_1"], data["handle_part_2"], data["handle_part_3"]
-    recipient = await db.get_user_by_handle(build_handle(p1, p2, p3))
-    if not recipient:
-        await callback.message.answer(
-            "Handle not found. Let's try again.\n\n"
-            "You will be prompted to enter 3 parts of the recipient handle "
-            "(format: slot1:slot2:slot3)\n"
-            "What's the 1st part of the recipient?"
-        )
-        await state.update_data(handle_part_1=None, handle_part_2=None, handle_part_3=None)
-        await state.set_state(Send.waiting_handle_part1)
-        return
-
-    # Check self-send early
-    sender = await db.get_user(callback.from_user.id)
-    if recipient["telegram_id"] == sender["telegram_id"]:
-        await callback.message.answer(
-            "You cannot send time to yourself. Let's try a different handle.\n\n"
-            "You will be prompted to enter 3 parts of the recipient handle "
-            "(format: slot1:slot2:slot3)\n"
-            "What's the 1st part of the recipient?"
-        )
-        await state.update_data(handle_part_1=None, handle_part_2=None, handle_part_3=None)
-        await state.set_state(Send.waiting_handle_part1)
-        return
-
-    # Handle confirmed — move to time collection
-    await callback.message.answer(
-        "You will be prompted to enter 3 parts of the transaction amount "
-        "corresponding to HH:MM:SS\n"
-        "How many Hours?"
-    )
-    await state.set_state(Send.waiting_hours)
-
-
-@router.callback_query(Send.confirming_handle, F.data == "handle_restart")
-async def cb_handle_restart(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await state.update_data(handle_part_1=None, handle_part_2=None, handle_part_3=None)
-    await callback.message.answer(
-        "You will be prompted to enter 3 parts of the recipient handle "
-        "(format: slot1:slot2:slot3)\n"
-        "What's the 1st part of the recipient?"
-    )
-    await state.set_state(Send.waiting_handle_part1)
-
-
-# --- Step 5 handler: hours ---
-
-@router.message(Send.waiting_hours, ~F.text.startswith("/"))
-async def send_hours(message: Message, state: FSMContext):
-    if _is_cancel(message.text):
-        await state.clear()
-        await message.answer("Transaction cancelled.")
-        return
-
-    text = message.text.strip()
-    if not re.match(r'^\d+$', text) or int(text) < 0:
-        await message.answer("Please enter a number (e.g. 2)")
-        return
-
-    await state.update_data(time_hours=int(text))
-    await message.answer("How many Minutes?")
-    await state.set_state(Send.waiting_minutes)
-
-
-# --- Step 6 handler: minutes ---
-
-@router.message(Send.waiting_minutes, ~F.text.startswith("/"))
-async def send_minutes(message: Message, state: FSMContext):
-    if _is_cancel(message.text):
-        await state.clear()
-        await message.answer("Transaction cancelled.")
-        return
-
-    text = message.text.strip()
-    if not re.match(r'^\d+$', text) or not (0 <= int(text) <= 59):
-        await message.answer("Please enter a number between 0 and 59 (e.g. 30)")
-        return
-
-    await state.update_data(time_minutes=int(text))
-    await message.answer("How many Seconds?")
-    await state.set_state(Send.waiting_seconds)
-
-
-# --- Step 7 handler: seconds — shows inline time confirm keyboard ---
-
-@router.message(Send.waiting_seconds, ~F.text.startswith("/"))
-async def send_seconds(message: Message, state: FSMContext):
-    if _is_cancel(message.text):
-        await state.clear()
-        await message.answer("Transaction cancelled.")
-        return
-
-    text = message.text.strip()
-    if not re.match(r'^\d+$', text) or not (0 <= int(text) <= 59):
-        await message.answer("Please enter a number between 0 and 59 (e.g. 45)")
-        return
-
-    await state.update_data(time_seconds=int(text))
-    data = await state.get_data()
-    h, m, s = data["time_hours"], data["time_minutes"], int(text)
-    await message.answer(
-        f"Do you want to send {h}H {m}M {s}S?",
-        reply_markup=_time_confirm_keyboard(),
-    )
-    await state.set_state(Send.confirming_time)
-
-
-# --- Step 8 callback: confirm time via inline button ---
-
-@router.callback_query(Send.confirming_time, F.data == "time_yes")
-async def cb_time_yes(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    data = await state.get_data()
-    total_seconds = data["time_hours"] * 3600 + data["time_minutes"] * 60 + data["time_seconds"]
-    if total_seconds < 1:
-        await callback.message.answer(
-            "The total amount must be at least 1 second. Let's try again.\n"
-            "How many Hours?"
-        )
-        await state.update_data(time_hours=None, time_minutes=None, time_seconds=None)
-        await state.set_state(Send.waiting_hours)
-        return
-
-    await callback.message.answer(
-        "Enter the percentage for 🟦  Blue Time  (default: 100).\n"
-        "The remainder will become 🟥  Red Time  automatically.\n"
-        "(Example: enter 90 → recipient gets 90% 🟦  Blue Time  and 10% 🟥  Red Time)"
-    )
-    await state.set_state(Send.waiting_blue)
-
-
-@router.callback_query(Send.confirming_time, F.data == "time_restart")
-async def cb_time_restart(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await state.update_data(time_hours=None, time_minutes=None, time_seconds=None)
-    await callback.message.answer(
-        "You will be prompted to enter 3 parts of the transaction amount "
-        "corresponding to HH:MM:SS\n"
-        "How many Hours?"
-    )
-    await state.set_state(Send.waiting_hours)
-
-
-# --- Step 9 handler: blue percentage — shows inline final confirm keyboard ---
-
-@router.message(Send.waiting_blue, ~F.text.startswith("/"))
-async def send_blue(message: Message, state: FSMContext):
-    if _is_cancel(message.text):
-        await state.clear()
-        await message.answer("Transaction cancelled.")
-        return
-
-    text = message.text.strip()
-
-    # Empty input or explicit 100 — use default
-    if text == "" or text == "100":
-        blue_pct = 100
-    elif re.match(r'^\d+$', text):
-        val = int(text)
-        if 0 <= val <= 100:
-            blue_pct = val
-        else:
-            await message.answer(
-                "Please enter a number between 0 and 100 (e.g. 90)"
-            )
-            return
-    else:
-        await message.answer(
-            "Please enter a number between 0 and 100 (e.g. 90)"
-        )
-        return
-
-    await state.update_data(blue_pct=blue_pct)
-    data = await state.get_data()
-    h = data["time_hours"]
-    m = data["time_minutes"]
-    s = data["time_seconds"]
-    p1 = data["handle_part_1"]
-    p2 = data["handle_part_2"]
-    p3 = data["handle_part_3"]
-    handle_preview = build_handle(p1, p2, p3)
-
-    await message.answer(
-        f"Last step. Do you want to send {h}H {m}M {s}S to {mono(handle_preview)}?",
-        parse_mode="Markdown",
-        reply_markup=_send_confirm_keyboard(),
-    )
-    await state.set_state(Send.confirming_send)
-
-
-# --- Step 10 callback: final confirmation via inline button ---
-
-@router.callback_query(Send.confirming_send, F.data == "send_confirm")
-async def cb_send_confirm(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    data = await state.get_data()
-    h = data["time_hours"]
-    m = data["time_minutes"]
-    s = data["time_seconds"]
-    p1 = data["handle_part_1"]
-    p2 = data["handle_part_2"]
-    p3 = data["handle_part_3"]
-    blue_pct = data["blue_pct"]
-    total_seconds = h * 3600 + m * 60 + s
-
-    sender = await db.get_user(callback.from_user.id)
-    recipient = await db.get_user_by_handle(build_handle(p1, p2, p3))
-
-    if not recipient:
-        await state.clear()
-        await callback.message.answer(
-            "Handle not found. The recipient may have been removed. Transaction cancelled."
-        )
-        return
-
-    success = await _do_transfer(callback.message, sender, recipient, total_seconds, blue_pct)
-    await state.clear()
-
-    if success:
-        red_pct = 100 - blue_pct
-        if blue_pct == 100:
-            color_line = "🟦  Blue Time  100%"
-        elif red_pct == 100:
-            color_line = "🟥  Red Time  100%"
-        else:
-            color_line = f"🟦  Blue Time  {blue_pct}%  /  🟥  Red Time  {red_pct}%"
-        await callback.message.answer(
-            f"Sent {h}H {m}M {s}S to {mono(build_handle(p1, p2, p3))}\n"
-            f"{color_line}",
-            parse_mode="Markdown",
-        )
-
-
-@router.callback_query(Send.confirming_send, F.data == "send_restart_blue")
-async def cb_send_restart_blue(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(
-        "Enter the percentage for 🟦  Blue Time  (default: 100).\n"
-        "The remainder will become 🟥  Red Time  automatically.\n"
-        "(Example: enter 90 → recipient gets 90% 🟦  Blue Time  and 10% 🟥  Red Time)"
-    )
-    await state.set_state(Send.waiting_blue)
-
-
-# ---------------------------------------------------------------------------
-# /history — Transaction history  (Feature 1: per-entry "Send again" buttons)
-# ---------------------------------------------------------------------------
-
-def _send_again_keyboard(recipient_handle: str) -> InlineKeyboardMarkup:
-    """Inline keyboard attached to each outbound history entry."""
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="Send again",
-            callback_data=f"history_send_again:{recipient_handle}",
-        )
-    ]])
-
 
 @router.message(Command("history"), StateFilter("*"))
 async def cmd_history(message: Message, state: FSMContext):
@@ -978,7 +373,7 @@ async def cmd_history(message: Message, state: FSMContext):
     )
 
     if not transactions:
-        await message.answer("No transactions yet. Use /send to transfer time to someone!")
+        await message.answer("No transactions yet. Time coupons are coming soon.")
         return
 
     await message.answer(
@@ -990,86 +385,26 @@ async def cmd_history(message: Message, state: FSMContext):
         direction = "SENT" if is_sender else "RECEIVED"
         other_raw = tx["recipient_handle"] if is_sender else tx["sender_handle"]
         arrow = "->" if is_sender else "<-"
-        blue = tx["blue_pct"]
-        red = 100 - blue
-        if blue == 100:
-            feedback = "🟦 100%"
-        elif red == 100:
-            feedback = "🟥 100%"
-        else:
-            feedback = f"🟦{blue}%/🟥{red}%"
 
         entry_text = (
             f"  {direction} {format_time(tx['amount'])} {arrow} {mono(other_raw)} "
-            f"({feedback}) [{tx['created_at'][:16]}]"
+            f"[{tx['created_at'][:16]}]"
         )
-
-        # Only outbound sends get the "Send again" button — inbound receipts
-        # would send back to the original sender, which may not be the intent.
-        if is_sender:
-            await message.answer(
-                entry_text,
-                parse_mode="Markdown",
-                reply_markup=_send_again_keyboard(other_raw),
-            )
-        else:
-            await message.answer(entry_text, parse_mode="Markdown")
+        await message.answer(entry_text, parse_mode="Markdown")
 
 
 # --- Feature 1 callback: "Send again" button from history ---
 
-@router.callback_query(F.data.startswith("history_send_again:"))
-async def cb_history_send_again(callback: CallbackQuery, state: FSMContext):
-    """Pre-fill the recipient from a history entry and jump to time-entry."""
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    handle_display = callback.data[len("history_send_again:"):]
-
-    # Clear any stale FSM state before starting a fresh send flow
-    await state.clear()
-
-    sender = await db.get_user(callback.from_user.id)
-    if not sender:
-        await callback.message.answer("You're not registered yet. Type /start to begin.")
-        return
-
-    await _prefill_handle_and_go_to_time(
-        callback.message, state, handle_display, sender["telegram_id"]
-    )
-
-
 # ---------------------------------------------------------------------------
-# /blue — Blue / Red time breakdown across all received transfers
+# /send — retired; sending time becomes time coupons (issue 02)
 # ---------------------------------------------------------------------------
 
-@router.message(Command("blue"), StateFilter("*"))
-async def cmd_blue(message: Message, state: FSMContext):
+@router.message(Command("send"), StateFilter("*"))
+async def cmd_send_retired(message: Message, state: FSMContext):
     await state.clear()
-    user = await db.get_user(message.from_user.id)
-    if not user:
-        await message.answer("You're not registered yet. Type /start to begin.")
-        return
-
-    breakdown = await db.get_blue_red_breakdown(message.from_user.id)
-
-    if breakdown is None:
-        await message.answer(
-            "No time received yet. Send or receive time to start building your Blue/Red history."
-        )
-        return
-
-    total_blue = breakdown["total_blue"]
-    total_red  = breakdown["total_red"]
-    total      = breakdown["total_seconds"]
-    blue_pct   = breakdown["blue_pct"]
-    red_pct    = 100.0 - blue_pct
-
     await message.answer(
-        f"Your Blue / Red Breakdown\n\n"
-        f"🟦  Blue Time   {format_time_full(total_blue)} ({blue_pct:.0f}%)\n"
-        f"🟥  Red Time    {format_time_full(total_red)} ({red_pct:.0f}%)\n\n"
-        f"Total received  {format_time_full(total)}"
+        "Sending time now works with time coupons: you make a coupon for an "
+        "amount, the other person scans or opens it. /coupon is coming next."
     )
 
 
@@ -1087,7 +422,7 @@ async def cmd_handle(message: Message, state: FSMContext):
 
     await message.answer(
         f"Your Handle:\n\n  {mono(user['handle_display'])}\n\n"
-        f"Others can send you time using this handle.",
+        f"This is how others will know you.",
         parse_mode="Markdown",
     )
 
@@ -1103,9 +438,7 @@ async def cmd_help(message: Message, state: FSMContext):
         "Time for UBI bot — Command Reference\n\n"
         "/start — Register and create your Handle\n"
         "/balance — Show your Daily Wallet + Time Vault\n"
-        "/send — Send time (walks you through it step by step)\n"
         "/history — Your recent transactions\n"
-        "/blue — Your 🟦  Blue Time  /  🟥  Red Time  breakdown\n"
         "/handle — Display your Handle\n"
         "/circles — Universal Circles balances\n\n"
         "🤗 Community Circles\n"
@@ -1121,9 +454,7 @@ async def cmd_help(message: Message, state: FSMContext):
         "- Unspent Wallet time flows to Universal Circles at midnight\n"
         "- Your Vault holds time received from others (max 24h, Tier 1)\n"
         "- Wallet is spent first, then Vault if needed\n"
-        "- Every transfer carries a 🟦  Blue Time  /  🟥  Red Time  satisfaction signal\n\n"
-        "Time format: enter Hours, Minutes, and Seconds separately when prompted\n"
-        "🟦 Blue Time: default 100%. Enter 0-100 when prompted\n"
+        "- Sending time works with time coupons (coming next)\n\n"
         "Handle format: word:word:word (e.g., cat:chef:888)"
     )
 
@@ -1744,70 +1075,6 @@ async def cmd_reboot(message: Message, state: FSMContext):
     # os.execv replaces the current process image in-place.
     # The new process inherits the same PID, env, and open FDs — clean restart.
     os.execv(sys.executable, [sys.executable] + sys.argv)
-
-
-# ---------------------------------------------------------------------------
-# Feature 4 — Reply-to-Send: reply to a bot confirmation → pre-fill /send
-# ---------------------------------------------------------------------------
-
-# Matches handles in any bot message: slot:slot:slot   (optionally @domain).
-# Slot contents exclude ':', whitespace, and '@'. We anchor on a non-handle
-# boundary (start-of-string or non-slot char) so things like a stray
-# "24:00:00" in a time string aren't picked up — slot tokens in bot output
-# are always wrapped in backticks (`mono(handle)`), so we anchor on backtick
-# or whitespace boundaries to keep the match precise.
-_HANDLE_RE = re.compile(
-    r'(?:^|[\s`])((?:[^\s:@`]+):(?:[^\s:@`]+):(?:[^\s:@`]+)(?:@[a-zA-Z0-9.-]+)?)(?=[\s`,.!?]|$)'
-)
-
-
-@router.message(F.reply_to_message, StateFilter(None))
-async def handle_reply_to_bot_message(message: Message, state: FSMContext):
-    """
-    If a user replies to a message sent by this bot that contains a UBI handle,
-    extract the handle and launch the send FSM at the time-entry step —
-    skipping the 3-part handle input entirely.
-
-    Only fires when there is no active FSM state, so it never interrupts an
-    ongoing /send flow.
-    """
-    # Confirm the replied-to message is from this bot
-    replied = message.reply_to_message
-    if not replied or not replied.from_user or not replied.from_user.is_bot:
-        return
-    if replied.from_user.id != bot.id:
-        return
-
-    # Check that the sender is registered
-    sender = await db.get_user(message.from_user.id)
-    if not sender:
-        return  # silent ignore — they can /start separately
-
-    # Try to find a handle in the replied-to message text
-    text_to_search = replied.text or replied.caption or ""
-    match = _HANDLE_RE.search(text_to_search)
-    if not match:
-        return
-
-    # group(1) is the handle proper; group(0) may include a leading boundary char.
-    handle_display = match.group(1)
-    # Strip federated @domain suffix if present — V1 of this feature only
-    # supports local recipients (federation isn't implemented yet).
-    handle_display = handle_display.split("@", 1)[0]
-
-    # Validate the handle still exists in the DB
-    recipient = await db.get_user_by_handle(handle_display)
-    if not recipient:
-        return  # handle may have been deleted — silent ignore
-
-    # Block self-sends before launching the FSM
-    if recipient["telegram_id"] == sender["telegram_id"]:
-        await message.answer("You cannot send time to yourself.")
-        return
-
-    await _prefill_handle_and_go_to_time(
-        message, state, handle_display, sender["telegram_id"]
-    )
 
 
 # ---------------------------------------------------------------------------

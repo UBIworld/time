@@ -22,7 +22,9 @@ from dotenv import load_dotenv
 # override=True ensures file values win over stale inherited env vars.
 # In production with systemd EnvironmentFile=, the vars are already set
 # and this call is safely a no-op.
-_env_path = Path(__file__).parent / ".env"
+# UBI_ENV_FILE lets a second instance (staging) run from the same checkout
+# with its own token and database, e.g. UBI_ENV_FILE=.env.staging.
+_env_path = Path(__file__).parent / os.environ.get("UBI_ENV_FILE", ".env")
 load_dotenv(_env_path, override=True)
 
 # Telegram Bot Token — loaded from environment, never hardcoded.
@@ -33,8 +35,8 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 # Set ADMIN_TELEGRAM_ID in the env file. Raises at startup if missing.
 ADMIN_TELEGRAM_ID = int(os.environ["ADMIN_TELEGRAM_ID"])
 
-# Database
-DB_PATH = "ubi_bot.db"
+# Database — override with DB_PATH so staging and production never share a file.
+DB_PATH = os.environ.get("DB_PATH", "ubi_bot.db")
 
 # Federation — local node domain (user-facing, e.g. "cat.ubi.asia").
 # Stamped onto every signed ledger entry so any reader can tell which
@@ -64,9 +66,6 @@ VAULT_CAPACITY_TIER1 = 86400  # 24h for Tier 1
 
 # Daily reset timezone (UTC for MVP)
 RESET_TIMEZONE = "UTC"
-
-# Default feedback
-DEFAULT_BLUE_PCT = 100
 
 # History display limit
 HISTORY_LIMIT = 10

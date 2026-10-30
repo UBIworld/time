@@ -73,9 +73,7 @@ The bot starts in polling mode — no webhook or server required. The SQLite dat
 |---------|-------------|
 | `/start` | Register and create your Handle (e.g. `house:cat:888`) |
 | `/balance` | Show Daily Wallet + Time Vault |
-| `/send @user 2h 30m` | Send time to another user by Telegram username |
-| `/send house:cat:888 2h 30m` | Send time by Handle |
-| `/send @user 1h blue:80` | Send time with 80% Blue feedback |
+| `/coupon` | Make a time coupon (QR) for someone to redeem — coming next, see `issues/02` |
 | `/history` | Recent transactions |
 | `/handle` | Show your Handle |
 | `/help` | Command reference |
@@ -87,11 +85,11 @@ The bot starts in polling mode — no webhook or server required. The SQLite dat
 - Every user gets **24 hours** in their Daily Wallet at midnight UTC
 - Each user has a **Handle** in the form `slot:slot:slot` (e.g. `house:cat:888`) — the cross-node identity
   - The parser also accepts an optional `@node.domain` suffix (e.g. `house:cat:888@cat.ubi.asia`) for forward-compatibility with federation
-- Send time to other users — it goes into their **Time Vault**
+- Send time with a **time coupon**: hours leave your Wallet when the coupon is made; whoever redeems it gets them in their **Time Vault**; unredeemed coupons flow to Universal Circles at expiry
 - Unspent Wallet time flows to **Universal Circles** at midnight
 - Time Vault holds time received from others (max 24h for Tier 1)
 - System draws from Wallet first, then Vault
-- Every transfer carries a **Blue/Red** satisfaction signal (default 100% Blue)
+- One kind of time: a transfer carries time and nothing else
 - Time displayed as `HHh MMm SSs` — nothing rounded
 
 ---
@@ -135,7 +133,7 @@ ubi-bot/
 3. Self-deposit impossible — cannot move own Wallet into own Vault
 4. Vault does not expire — earned time persists
 5. System draws from Wallet first, Vault only when Wallet insufficient
-6. Every transfer carries Blue/Red feedback
+6. One kind of time — a transfer carries no score or feedback signal
 7. Time denominated as HHh MMm SSs — nothing rounded
 
 ---
