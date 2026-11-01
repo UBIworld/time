@@ -23,44 +23,63 @@
 <main id="app" hidden>
 
   <div class="hero">
-    <div class="hero-label">Your time today</div>
-    <div class="ring-wrap">
-      <svg class="ring" viewBox="0 0 200 200" role="img" aria-label="How your 24 hours today are split">
-        <circle class="ring-track" cx="100" cy="100" r="80"/>
-        <circle class="seg seg-given" id="segGiven" cx="100" cy="100" r="80"/>
-        <circle class="seg seg-pending" id="segPending" cx="100" cy="100" r="80"/>
-        <circle class="seg seg-left" id="segLeft" cx="100" cy="100" r="80"/>
-      </svg>
-      <div class="ring-center">
-        <div class="hero-value num" id="wallet">—</div>
-        <div class="ring-caption">left to give</div>
-      </div>
-    </div>
-    <ul class="legend">
-      <li><span class="dot d-left"></span><span class="lg-name">Left to give</span><span class="lg-val num" id="lgLeft">—</span></li>
-      <li><span class="dot d-pending"></span><span class="lg-name">Pending in coupons</span><span class="lg-val num" id="lgPending">—</span></li>
-      <li><span class="dot d-given"></span><span class="lg-name">Given today</span><span class="lg-val num" id="lgGiven">—</span></li>
-    </ul>
-    <div class="dayline">
-      <div class="dayline-head"><span class="dayline-label">A new 24 hours arrive in</span><span class="dayline-count num" id="countdown">—</span></div>
-      <p>At midnight UTC. Whatever you have not given by then flows to the Universal Circles, for everyone.</p>
+    <div class="tabs" role="tablist" aria-label="Which time to show">
+      <button type="button" class="tab on" id="tabDay" role="tab" aria-selected="true">Today</button>
+      <button type="button" class="tab" id="tabVault" role="tab" aria-selected="false">Vault</button>
     </div>
 
-    <div class="vault">
-      <svg class="ring ring-sm" viewBox="0 0 80 80" role="img" aria-label="How full your Time Vault is">
-        <circle class="ring-track" cx="40" cy="40" r="31"/>
-        <circle class="seg seg-pending" id="vsegPending" cx="40" cy="40" r="31"/>
-        <circle class="seg seg-left" id="vsegHeld" cx="40" cy="40" r="31"/>
-      </svg>
-      <div class="vault-text">
-        <span class="hero-label">Time Vault</span>
-        <div class="vault-value serif num" id="vault">—</div>
-        <div class="vault-sub">Time others have given you. It never expires. Holds up to <span class="num" id="cap">—</span>.<span id="vaultPending"></span></div>
+    <div id="panelDay" role="tabpanel">
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 200 200" role="img" aria-label="How your 24 hours today are split">
+          <circle class="ring-track" cx="100" cy="100" r="80"/>
+          <circle class="seg seg-given" id="segGiven" cx="100" cy="100" r="80"/>
+          <circle class="seg seg-pending" id="segPending" cx="100" cy="100" r="80"/>
+          <circle class="seg seg-left" id="segLeft" cx="100" cy="100" r="80"/>
+        </svg>
+        <div class="ring-center">
+          <div class="hero-value num" id="wallet">—</div>
+          <div class="ring-caption">left to give</div>
+        </div>
       </div>
+      <ul class="legend">
+        <li><span class="dot d-left"></span><span class="lg-name">Left to give</span><span class="lg-val num" id="lgLeft">—</span></li>
+        <li><span class="dot d-pending"></span><span class="lg-name">Pending in coupons</span><span class="lg-val num" id="lgPending">—</span></li>
+        <li><span class="dot d-given"></span><span class="lg-name">Given today</span><span class="lg-val num" id="lgGiven">—</span></li>
+      </ul>
+      <p class="dayline">New day in <strong class="num" id="countdown">—</strong>. What is left flows to the Universal Circles. <a href="https://ubi.vision/#daily-wallet" data-ext>How a day works</a></p>
+    </div>
+
+    <div id="panelVault" role="tabpanel" hidden>
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 200 200" role="img" aria-label="How full your Time Vault is">
+          <circle class="ring-track" cx="100" cy="100" r="80"/>
+          <circle class="seg seg-left" id="vsegHeld" cx="100" cy="100" r="80"/>
+          <circle class="seg seg-pending" id="vsegPending" cx="100" cy="100" r="80"/>
+        </svg>
+        <div class="ring-center">
+          <div class="hero-value num" id="vault">—</div>
+          <div class="ring-caption">in your Vault</div>
+        </div>
+      </div>
+      <ul class="legend">
+        <li><span class="dot d-left"></span><span class="lg-name">Held now</span><span class="lg-val num" id="vlHeld">—</span></li>
+        <li><span class="dot d-pending"></span><span class="lg-name">Locked in open coupons</span><span class="lg-val num" id="vlPending">—</span></li>
+        <li><span class="dot d-room"></span><span class="lg-name">Room left (up to <span class="num" id="cap">—</span>)</span><span class="lg-val num" id="vlRoom">—</span></li>
+      </ul>
+      <p class="dayline">Time others have given you. It never expires. <a href="https://ubi.vision/#time-vault" data-ext>How the Vault works</a></p>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="action" data-go="giveSection">
+        <span class="action-ico"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8"/></svg></span>Give</button>
+      <button type="button" class="action" data-go="receiveSection">
+        <span class="action-ico"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 7L7 17M15 17H7V9"/></svg></span>Receive</button>
+      <button type="button" class="action" data-go="contactsSection">
+        <span class="action-ico"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5M16.5 5.2a3 3 0 0 1 0 5.6M18 14.8c2 .6 3.3 2.3 3.3 5.2"/></svg></span>Contacts</button>
     </div>
   </div>
 
-  <section>
+  <section id="giveSection">
     <h2>Give time</h2>
     <p class="lede">Choose an amount. You get a coupon to hand to someone, as a QR code or a link.</p>
 
@@ -115,7 +134,7 @@
     </div>
   </section>
 
-  <section>
+  <section id="receiveSection">
     <h2>Receive time</h2>
     <p class="lede">Someone handed you a coupon? Paste its link or code. The time lands in your Vault.</p>
     <form id="redeemForm" class="receive">
@@ -274,10 +293,27 @@ function drawRings(me){
   arc($('segLeft'), 80, given + pend, left, day);
   $('lgLeft').textContent = fmtHM(left); $('lgPending').textContent = fmtHM(pend); $('lgGiven').textContent = fmtHM(given);
   const cap = me.vault_capacity, held = me.vault, vp = me.vault_pending;
-  arc($('vsegHeld'), 31, 0, held, cap);
-  arc($('vsegPending'), 31, held, vp, cap);
-  $('vaultPending').textContent = vp > 0 ? ` ${fmtHM(vp)} more is locked in open coupons.` : '';
+  arc($('vsegHeld'), 80, 0, held, cap);
+  arc($('vsegPending'), 80, held, vp, cap);
+  $('vlHeld').textContent = fmtHM(held); $('vlPending').textContent = fmtHM(vp); $('vlRoom').textContent = fmtHM(Math.max(0, cap - held - vp));
 }
+
+// Today / Vault switch
+function showTab(which){
+  const vault = which === 'vault';
+  $('panelDay').hidden = vault; $('panelVault').hidden = !vault;
+  $('tabDay').classList.toggle('on', !vault); $('tabVault').classList.toggle('on', vault);
+  $('tabDay').setAttribute('aria-selected', String(!vault)); $('tabVault').setAttribute('aria-selected', String(vault));
+}
+$('tabDay').addEventListener('click', () => showTab('day'));
+$('tabVault').addEventListener('click', () => showTab('vault'));
+
+// Action buttons scroll to their section
+document.querySelector('.actions').addEventListener('click', e => {
+  const b = e.target.closest('[data-go]'); if (!b) return;
+  if (b.dataset.go === 'giveSection') { $('qr').hidden = true; $('giveBox').hidden = false; }
+  $(b.dataset.go).scrollIntoView({behavior: 'smooth', block: 'start'});
+});
 
 setInterval(() => { if (resetIn !== null) { resetIn -= 1; $('countdown').textContent = fmt(resetIn); if (resetIn <= 0) load(); } }, 1000);
 

@@ -5,6 +5,9 @@ Staging (`@timeubi_stagingbot`, app.ubi.world) runs the branch under review; `ma
 
 ## Unreleased (on staging, awaiting approval)
 
+- **Today / Vault switch** at the top of the wallet. Today shows the 24-hour ring; Vault shows the Vault ring with held, locked-in-coupons and room left. Each has a one-line note and a link to the spec ("How a day works", "How the Vault works").
+- **Action buttons** Give, Receive and Contacts under the ring; Give time now starts on the first screen.
+- The two-line day card is replaced by one compact line with the countdown.
 - **Numbers in a clear sans font.** The serif font's old-style zero looked like the letter o; amounts and the countdown now use lining figures.
 - **Wallet text.** Ring centre shows hours and minutes with room around it; a "A new 24 hours arrive in" card replaces the long sentence; the Vault note says it never expires.
 - **Flag-only top bar, and links** to the book, the spec and the ledger at the bottom of the wallet and coupon pages (opened in Telegram's browser inside the Mini App).

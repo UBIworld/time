@@ -62,9 +62,9 @@ button,input,select{font:inherit;color:inherit}
 main{max-width:480px;margin:0 auto;padding:0 1rem 3rem}
 
 /* Hero — today's time as a ring, readable in one glance */
-.hero{padding:1.2rem 0 1.1rem;border-bottom:1px solid var(--rule)}
+.hero{padding:1rem 0 1.2rem;border-bottom:1px solid var(--rule)}
 .hero-label{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:var(--muted)}
-.ring-wrap{position:relative;width:min(230px,66vw);margin:.7rem auto .5rem}
+.ring-wrap{position:relative;width:min(210px,58vw);margin:.9rem auto .4rem}
 .ring{display:block;width:100%;height:auto;transform:rotate(-90deg)}
 .ring-track{fill:none;stroke:var(--rule);stroke-width:18}
 .ring-sm .ring-track{stroke-width:9}
@@ -81,11 +81,10 @@ main{max-width:480px;margin:0 auto;padding:0 1rem 3rem}
 .d-left{background:var(--sky)}.d-pending{background:var(--orange)}.d-given{background:var(--green)}
 .lg-name{flex:1;color:var(--muted)}
 .lg-val{font-weight:600}
-.dayline{padding:.85rem 1rem;background:var(--bg-elev);border:1px solid var(--rule);border-radius:14px}
-.dayline-head{display:flex;align-items:baseline;justify-content:space-between;gap:.8rem}
-.dayline-label{font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;font-weight:700;color:var(--muted)}
-.dayline-count{font-size:1.15rem;font-weight:700;white-space:nowrap}
-.dayline p{font-size:.88rem;color:var(--muted);margin-top:.35rem}
+.dayline{font-size:.88rem;color:var(--muted);text-align:center;margin:.2rem 0 1rem}
+.dayline strong{color:var(--fg)}
+.dayline a{color:var(--accent);white-space:nowrap}
+.d-room{background:var(--rule-strong)}
 .vault{display:flex;align-items:center;gap:1rem;margin-top:1rem;padding-top:1rem;border-top:1px dashed var(--rule)}
 .vault .ring-sm{width:76px;flex:0 0 auto}
 .vault-text{min-width:0}
@@ -207,3 +206,18 @@ footer .logout{color:var(--muted);font-size:.85rem}
   main{padding-top:.5rem}
   .hero-value{font-size:3rem}
 }
+
+/* Today / Vault switch */
+.tabs{display:flex;width:max-content;margin:0 auto;padding:4px;background:var(--bg-elev);border:1px solid var(--rule);border-radius:999px}
+.tab{background:transparent;border:0;border-radius:999px;padding:.45rem 1.5rem;font-size:.95rem;font-weight:700;color:var(--faint);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.tab.on{background:var(--rule-strong);color:var(--fg)}
+.tab:focus-visible{outline:2px solid var(--action);outline-offset:2px}
+
+/* Action buttons under the ring */
+.actions{display:flex;justify-content:space-around;margin-top:.4rem;padding:.9rem .4rem .7rem;background:var(--bg-elev);border:1px solid var(--rule);border-radius:20px}
+.action{display:flex;flex-direction:column;align-items:center;gap:.4rem;background:none;border:0;cursor:pointer;
+  font-size:.82rem;font-weight:600;color:var(--fg);min-width:4.5rem;-webkit-tap-highlight-color:transparent}
+.action-ico{display:flex;align-items:center;justify-content:center;width:3.2rem;height:3.2rem;border-radius:50%;
+  background:var(--action);color:var(--action-fg)}
+.action:active .action-ico{background:var(--action-press)}
+.action:focus-visible{outline:2px solid var(--action);outline-offset:3px;border-radius:12px}
