@@ -222,6 +222,9 @@ async def api_me(request: web.Request):
         return _json({"ok": False, "error": "not_logged_in"}, 401)
     tx = await db.get_transaction_history(user["telegram_id"], 5)
     my_coupons = await coupons.list_coupons_for_issuer(user["telegram_id"], 10)
+    pending = await coupons.pending_amounts(user["telegram_id"])
+    day = config.DAILY_WALLET_AMOUNT
+    given = max(0, day - user["daily_wallet"] - pending["wallet"])
     return _json({
         "ok": True,
         "handle": user["handle_display"],
@@ -230,6 +233,10 @@ async def api_me(request: web.Request):
         "vault": user["time_vault"],
         "vault_text": format_time(user["time_vault"]),
         "vault_capacity": user["vault_capacity"],
+        "day_total": day,
+        "wallet_pending": pending["wallet"],
+        "wallet_given": given,
+        "vault_pending": pending["vault"],
         "next_reset_in": time_until_midnight_utc(),
         "transactions": [
             {

@@ -24,16 +24,38 @@
 <main id="app" hidden>
 
   <div class="hero">
-    <div class="hero-label">Daily Wallet · today</div>
-    <div class="hero-value num" id="wallet">—</div>
-    <div class="hero-sub">Yours to give until midnight UTC, in <span class="countdown num" id="countdown">—</span>.
-      Whatever is left then flows to the Universal Circles.</div>
-    <div class="vault">
-      <div>
-        <span class="hero-label">Time Vault</span>
-        <div class="vault-sub">Time others have given you. Holds up to <span class="num" id="cap">—</span>.</div>
+    <div class="hero-label">Your time today</div>
+    <div class="ring-wrap">
+      <svg class="ring" viewBox="0 0 200 200" role="img" aria-label="How your 24 hours today are split">
+        <circle class="ring-track" cx="100" cy="100" r="80"/>
+        <circle class="seg seg-given" id="segGiven" cx="100" cy="100" r="80"/>
+        <circle class="seg seg-pending" id="segPending" cx="100" cy="100" r="80"/>
+        <circle class="seg seg-left" id="segLeft" cx="100" cy="100" r="80"/>
+      </svg>
+      <div class="ring-center">
+        <div class="hero-value num" id="wallet">—</div>
+        <div class="ring-caption">left to give</div>
       </div>
-      <div class="vault-value serif num" id="vault">—</div>
+    </div>
+    <ul class="legend">
+      <li><span class="dot d-left"></span><span class="lg-name">Left to give</span><span class="lg-val num" id="lgLeft">—</span></li>
+      <li><span class="dot d-pending"></span><span class="lg-name">Pending in coupons</span><span class="lg-val num" id="lgPending">—</span></li>
+      <li><span class="dot d-given"></span><span class="lg-name">Given today</span><span class="lg-val num" id="lgGiven">—</span></li>
+    </ul>
+    <div class="hero-sub">Out of 24h. At midnight UTC, in <span class="countdown num" id="countdown">—</span>,
+      what is left flows to the Universal Circles.</div>
+
+    <div class="vault">
+      <svg class="ring ring-sm" viewBox="0 0 80 80" role="img" aria-label="How full your Time Vault is">
+        <circle class="ring-track" cx="40" cy="40" r="31"/>
+        <circle class="seg seg-pending" id="vsegPending" cx="40" cy="40" r="31"/>
+        <circle class="seg seg-left" id="vsegHeld" cx="40" cy="40" r="31"/>
+      </svg>
+      <div class="vault-text">
+        <span class="hero-label">Time Vault</span>
+        <div class="vault-value serif num" id="vault">—</div>
+        <div class="vault-sub">Time others gave you. Holds up to <span class="num" id="cap">—</span>.<span id="vaultPending"></span></div>
+      </div>
     </div>
   </div>
 
@@ -172,6 +194,7 @@ async function load(){
   $('wallet').textContent = me.wallet_text;
   $('vault').textContent = me.vault_text;
   $('cap').textContent = fmt(me.vault_capacity);
+  drawRings(me);
   resetIn = me.next_reset_in; $('countdown').textContent = fmt(resetIn);
 
   const cl = $('coupons'); cl.innerHTML = '';
@@ -195,6 +218,24 @@ async function load(){
     tl.appendChild(li);
   });
   $('txsEmpty').hidden = me.transactions.length > 0;
+}
+
+// A ring is one circle cut into arcs; each arc is a dash on the same circle, shifted by what came before it.
+function arc(el, r, start, len, total){
+  const C = 2 * Math.PI * r, a = Math.max(0, len) / total * C, o = start / total * C;
+  el.style.strokeDasharray = `${a} ${C - a}`; el.style.strokeDashoffset = `${-o}`;
+  el.style.display = a > 0.5 ? '' : 'none';
+}
+function drawRings(me){
+  const day = me.day_total, left = me.wallet, pend = me.wallet_pending, given = me.wallet_given;
+  arc($('segGiven'), 80, 0, given, day);
+  arc($('segPending'), 80, given, pend, day);
+  arc($('segLeft'), 80, given + pend, left, day);
+  $('lgLeft').textContent = fmt(left); $('lgPending').textContent = fmt(pend); $('lgGiven').textContent = fmt(given);
+  const cap = me.vault_capacity, held = me.vault, vp = me.vault_pending;
+  arc($('vsegHeld'), 31, 0, held, cap);
+  arc($('vsegPending'), 31, held, vp, cap);
+  $('vaultPending').textContent = vp > 0 ? ` ${fmt(vp)} more is locked in open coupons.` : '';
 }
 
 setInterval(() => { if (resetIn !== null) { resetIn -= 1; $('countdown').textContent = fmt(resetIn); if (resetIn <= 0) load(); } }, 1000);

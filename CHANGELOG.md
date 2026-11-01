@@ -5,6 +5,7 @@ Staging (`@timeubi_stagingbot`, app.ubi.world) runs the branch under review; `ma
 
 ## Unreleased (on staging, awaiting approval)
 
+- **Time rings.** The top of the wallet is now a 24-hour ring: left to give (sky), pending in open coupons (orange), given today (green), with the numbers beside it. A smaller ring shows the Time Vault against its capacity, plus time locked in open coupons.
 - **Copy handle.** The handle pill at the top has a copy icon; one tap copies the handle and the icon turns into a check.
 
 ## v0.1.0 · 2026-11-01

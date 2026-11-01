@@ -60,16 +60,33 @@ button,input,select{font:inherit;color:inherit}
 
 main{max-width:480px;margin:0 auto;padding:0 1rem 3rem}
 
-/* Hero — today's balances, readable in one glance */
-.hero{padding:1.4rem 0 1.1rem;border-bottom:1px solid var(--rule)}
+/* Hero — today's time as a ring, readable in one glance */
+.hero{padding:1.2rem 0 1.1rem;border-bottom:1px solid var(--rule)}
 .hero-label{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:var(--muted)}
-.hero-value{font-size:2.6rem;line-height:1.1;font-weight:700;letter-spacing:-.01em;margin:.15rem 0 .35rem}
-.hero-sub{font-size:.9rem;color:var(--muted)}
+.ring-wrap{position:relative;width:min(230px,66vw);margin:.7rem auto .5rem}
+.ring{display:block;width:100%;height:auto;transform:rotate(-90deg)}
+.ring-track{fill:none;stroke:var(--rule);stroke-width:18}
+.ring-sm .ring-track{stroke-width:9}
+.seg{fill:none;stroke-width:18;stroke-linecap:butt;transition:stroke-dasharray .5s,stroke-dashoffset .5s}
+.ring-sm .seg{stroke-width:9}
+.seg-left{stroke:var(--sky)}.seg-pending{stroke:var(--orange)}.seg-given{stroke:var(--green)}
+.ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.hero-value{font-size:1.55rem;line-height:1.1;font-weight:700;letter-spacing:-.01em}
+.ring-caption{font-size:.78rem;color:var(--muted);margin-top:.15rem}
+.legend{list-style:none;margin:.6rem 0 .8rem}
+.legend li{display:flex;align-items:center;gap:.6rem;padding:.38rem 0;border-top:1px solid var(--rule);font-size:.95rem}
+.legend li:first-child{border-top:0}
+.dot{width:.7rem;height:.7rem;border-radius:50%;flex:0 0 auto}
+.d-left{background:var(--sky)}.d-pending{background:var(--orange)}.d-given{background:var(--green)}
+.lg-name{flex:1;color:var(--muted)}
+.lg-val{font-weight:600}
+.hero-sub{font-size:.88rem;color:var(--muted)}
 .hero-sub .countdown{color:var(--fg);font-weight:600}
-.vault{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;margin-top:1rem;padding-top:.9rem;border-top:1px dashed var(--rule)}
-.vault .hero-label{display:block}
-.vault .vault-sub{font-size:.82rem;color:var(--muted);margin-top:.1rem}
-.vault .vault-value{font-size:1.35rem;font-weight:700;white-space:nowrap}
+.vault{display:flex;align-items:center;gap:1rem;margin-top:1rem;padding-top:1rem;border-top:1px dashed var(--rule)}
+.vault .ring-sm{width:76px;flex:0 0 auto}
+.vault-text{min-width:0}
+.vault .vault-value{font-size:1.5rem;font-weight:700;margin:.05rem 0}
+.vault .vault-sub{font-size:.82rem;color:var(--muted)}
 
 /* Sections */
 section{padding:1.3rem 0 .4rem}

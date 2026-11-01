@@ -280,6 +280,21 @@ async def list_coupons_for_issuer(telegram_id: int, limit: int = 10) -> list[dic
         return [dict(r) for r in await cursor.fetchall()]
 
 
+async def pending_amounts(telegram_id: int) -> dict:
+    """Time this user has locked in coupons nobody has opened yet, split by where it came from."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            SELECT COALESCE(SUM(c.wallet_part), 0), COALESCE(SUM(c.vault_part), 0)
+            FROM coupons c JOIN users u ON c.issuer_id = u.id
+            WHERE u.telegram_id = ? AND c.status = 'issued'
+            """,
+            (telegram_id,),
+        )
+        w, v = await cursor.fetchone()
+    return {"wallet": int(w), "vault": int(v)}
+
+
 # ---------------------------------------------------------------------------
 # Redeem
 # ---------------------------------------------------------------------------
