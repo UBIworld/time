@@ -14,7 +14,11 @@
 <div class="topbar">
   <img src="/static/flag.png" alt="">
   <span class="brand">Time for UBI</span>
-  <span class="handle" id="handle"></span>
+  <button type="button" class="handle" id="handle" hidden aria-label="Copy my handle">
+    <span id="handleText"></span>
+    <svg class="ico-copy" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+    <svg class="ico-ok" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+  </button>
 </div>
 
 <main id="app" hidden>
@@ -164,7 +168,7 @@ async function load(){
   if (!me.ok) { $('loginBox').hidden = false; $('app').hidden = true; return; }
   $('loginBox').hidden = true; $('app').hidden = false;
   myHandle = me.handle;
-  $('handle').textContent = me.handle;
+  $('handleText').textContent = me.handle; $('handle').hidden = false;
   $('wallet').textContent = me.wallet_text;
   $('vault').textContent = me.vault_text;
   $('cap').textContent = fmt(me.vault_capacity);
@@ -252,6 +256,22 @@ $('codeForm').addEventListener('submit', async e => {
   const r = await api('/auth/code', {code: $('loginCode').value});
   if (r.ok) { $('loginCode').value = ''; $('codeMsg').textContent = ''; load(); }
   else $('codeMsg').textContent = 'That code did not work, or it was already used. Send /app again for a fresh one.';
+});
+
+// Copy the handle: modern clipboard first, a hidden textarea where a webview refuses it.
+async function copyText(text){
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+  const t = document.createElement('textarea'); t.value = text; t.setAttribute('readonly', ''); t.style.cssText = 'position:fixed;opacity:0';
+  document.body.appendChild(t); t.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+  t.remove(); return ok;
+}
+$('handle').addEventListener('click', async () => {
+  if (!myHandle) return;
+  if (await copyText(myHandle)) {
+    $('handle').classList.add('copied'); $('handle').setAttribute('aria-label', 'Handle copied');
+    setTimeout(() => { $('handle').classList.remove('copied'); $('handle').setAttribute('aria-label', 'Copy my handle'); }, 1400);
+  }
 });
 
 tryWebAppLogin().then(load);

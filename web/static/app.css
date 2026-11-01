@@ -46,9 +46,17 @@ button,input,select{font:inherit;color:inherit}
 .topbar a{display:contents}
 .topbar img{height:20px;width:auto;border-radius:2px;display:block}
 .topbar .brand{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:var(--muted)}
-.topbar .handle:empty{display:none}
-.topbar .handle{margin-left:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem;color:var(--fg);
-  background:var(--bg-elev);border:1px solid var(--rule);border-radius:999px;padding:.22rem .65rem;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar .handle{margin-left:auto;display:inline-flex;align-items:center;gap:.45rem;cursor:pointer;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem;color:var(--fg);
+  background:var(--bg-elev);border:1px solid var(--rule);border-radius:999px;padding:.22rem .6rem .22rem .7rem;max-width:62%;
+  -webkit-tap-highlight-color:transparent}
+.topbar .handle span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar .handle svg{flex:0 0 auto;color:var(--muted)}
+.topbar .handle .ico-ok{display:none;color:var(--ok)}
+.topbar .handle.copied .ico-copy{display:none}
+.topbar .handle.copied .ico-ok{display:block}
+.topbar .handle:active{background:var(--rule)}
+.topbar .handle:focus-visible{outline:2px solid var(--action);outline-offset:2px}
 
 main{max-width:480px;margin:0 auto;padding:0 1rem 3rem}
 

@@ -3,6 +3,10 @@
 Versions are tagged `vX.Y.Z` on `main`. Each tag has a GitHub Release with the same notes.
 Staging (`@timeubi_stagingbot`, app.ubi.world) runs the branch under review; `main` is what has been approved.
 
+## Unreleased (on staging, awaiting approval)
+
+- **Copy handle.** The handle pill at the top has a copy icon; one tap copies the handle and the icon turns into a check.
+
 ## v0.1.0 · 2026-11-01
 
 First version with time coupons and a visual app.
