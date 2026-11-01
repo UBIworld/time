@@ -31,8 +31,9 @@ body{
   font-size:17px; line-height:1.45; min-height:100vh;
   -webkit-font-smoothing:antialiased;
 }
-.serif,.amount,.hero-value,h1{font-family:Georgia,"Iowan Old Style","Palatino Linotype","Times New Roman",serif}
-.num{font-variant-numeric:tabular-nums}
+h1{font-family:Georgia,"Iowan Old Style","Palatino Linotype","Times New Roman",serif}
+/* Numbers use the sans stack: Georgia's old-style 0 looks like the letter o. */
+.num,.amount,.hero-value,.row-amount,.vault-value,.timepick input{font-variant-numeric:lining-nums tabular-nums}
 a{color:var(--accent)}
 [hidden]{display:none !important}
 button,input,select{font:inherit;color:inherit}
@@ -44,7 +45,7 @@ button,input,select{font:inherit;color:inherit}
 .topbar{display:flex;align-items:center;gap:.6rem;padding:.65rem 1rem;position:sticky;top:0;z-index:5;
   background:var(--bg);border-bottom:1px solid var(--rule)}
 .topbar a{display:contents}
-.topbar img{height:20px;width:auto;border-radius:2px;display:block}
+.topbar img{height:28px;width:auto;border-radius:2px;display:block}
 .topbar .brand{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:var(--muted)}
 .topbar .handle{margin-left:auto;display:inline-flex;align-items:center;gap:.45rem;cursor:pointer;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem;color:var(--fg);
@@ -70,8 +71,8 @@ main{max-width:480px;margin:0 auto;padding:0 1rem 3rem}
 .seg{fill:none;stroke-width:18;stroke-linecap:butt;transition:stroke-dasharray .5s,stroke-dashoffset .5s}
 .ring-sm .seg{stroke-width:9}
 .seg-left{stroke:var(--sky)}.seg-pending{stroke:var(--orange)}.seg-given{stroke:var(--green)}
-.ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
-.hero-value{font-size:1.55rem;line-height:1.1;font-weight:700;letter-spacing:-.01em}
+.ring-center{position:absolute;inset:0;padding:0 21%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.hero-value{font-size:1.9rem;line-height:1.1;font-weight:700;letter-spacing:-.01em}
 .ring-caption{font-size:.78rem;color:var(--muted);margin-top:.15rem}
 .legend{list-style:none;margin:.6rem 0 .8rem}
 .legend li{display:flex;align-items:center;gap:.6rem;padding:.38rem 0;border-top:1px solid var(--rule);font-size:.95rem}
@@ -80,8 +81,11 @@ main{max-width:480px;margin:0 auto;padding:0 1rem 3rem}
 .d-left{background:var(--sky)}.d-pending{background:var(--orange)}.d-given{background:var(--green)}
 .lg-name{flex:1;color:var(--muted)}
 .lg-val{font-weight:600}
-.hero-sub{font-size:.88rem;color:var(--muted)}
-.hero-sub .countdown{color:var(--fg);font-weight:600}
+.dayline{padding:.85rem 1rem;background:var(--bg-elev);border:1px solid var(--rule);border-radius:14px}
+.dayline-head{display:flex;align-items:baseline;justify-content:space-between;gap:.8rem}
+.dayline-label{font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;font-weight:700;color:var(--muted)}
+.dayline-count{font-size:1.15rem;font-weight:700;white-space:nowrap}
+.dayline p{font-size:.88rem;color:var(--muted);margin-top:.35rem}
 .vault{display:flex;align-items:center;gap:1rem;margin-top:1rem;padding-top:1rem;border-top:1px dashed var(--rule)}
 .vault .ring-sm{width:76px;flex:0 0 auto}
 .vault-text{min-width:0}
@@ -97,7 +101,7 @@ h2{font-size:1.25rem;font-weight:700;letter-spacing:-.01em;margin-bottom:.25rem}
 .give{scroll-margin-top:4rem;background:var(--bg-elev);border:1px solid var(--rule);border-radius:16px;padding:1.1rem 1.1rem 1rem}
 .timepick{display:flex;align-items:center;justify-content:center;gap:.4rem;margin:.2rem 0 1rem}
 .timepick input{width:5.6rem;background:var(--field);border:1px solid var(--rule-strong);border-radius:12px;
-  padding:.45rem .3rem;text-align:center;font-family:Georgia,serif;font-size:2.1rem;font-weight:700;line-height:1.15;
+  padding:.45rem .3rem;text-align:center;font-size:2.1rem;font-weight:700;line-height:1.15;
   -moz-appearance:textfield;appearance:textfield}
 .timepick input::-webkit-outer-spin-button,.timepick input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .timepick input:focus{outline:2px solid var(--action);outline-offset:1px;border-color:var(--action)}
@@ -167,7 +171,7 @@ ul.list li{border-top:1px solid var(--rule);padding:.75rem 0}
 ul.list li:first-child{border-top:0}
 ul.list a.row,ul.list div.row{display:flex;align-items:center;gap:.6rem;color:inherit;text-decoration:none}
 .row-main{flex:1;min-width:0}
-.row-amount{font-family:Georgia,serif;font-size:1.15rem;font-weight:700;line-height:1.2}
+.row-amount{font-size:1.15rem;font-weight:700;line-height:1.2}
 .row-sub{font-size:.85rem;color:var(--muted);margin-top:.1rem;overflow-wrap:anywhere}
 .row-sub .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem;color:var(--fg)}
 .row-sub.open{color:var(--ok)}
@@ -176,8 +180,10 @@ ul.list a.row,ul.list div.row{display:flex;align-items:center;gap:.6rem;color:in
 .row-when{font-size:.8rem;color:var(--faint);white-space:nowrap}
 .empty{color:var(--muted);font-size:.92rem;padding:.4rem 0 .6rem}
 
-footer{text-align:center;padding:1.6rem 0 0}
-footer a{color:var(--muted);font-size:.85rem}
+footer{text-align:center;padding:1.8rem 0 .5rem;border-top:1px solid var(--rule);margin-top:1.8rem}
+footer .sites{display:flex;justify-content:center;gap:1.4rem;margin-bottom:1rem}
+footer .sites a{color:var(--fg);font-size:.92rem;font-weight:600;text-decoration:none;border-bottom:1px solid var(--rule-strong);padding-bottom:.1rem}
+footer .logout{color:var(--muted);font-size:.85rem}
 
 /* Login */
 .login{max-width:400px;margin:0 auto;padding:3rem 1.3rem 2rem;text-align:center}

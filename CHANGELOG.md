@@ -5,6 +5,9 @@ Staging (`@timeubi_stagingbot`, app.ubi.world) runs the branch under review; `ma
 
 ## Unreleased (on staging, awaiting approval)
 
+- **Numbers in a clear sans font.** The serif font's old-style zero looked like the letter o; amounts and the countdown now use lining figures.
+- **Wallet text.** Ring centre shows hours and minutes with room around it; a "A new 24 hours arrive in" card replaces the long sentence; the Vault note says it never expires.
+- **Flag-only top bar, and links** to the book, the spec and the ledger at the bottom of the wallet and coupon pages (opened in Telegram's browser inside the Mini App).
 - **Contacts.** People you exchange time with become contacts automatically, on both sides. You can add someone by hand with their handle, or by Telegram name if they switched on "Let people find me by my Telegram name" (off by default; the lookup shows only their UBI handle). Tap Give on a contact to make a coupon only they can open.
 - **Fix:** new versions of the app now show up at once instead of waiting up to four hours behind Cloudflare's cache.
 - **Time rings.** The top of the wallet is now a 24-hour ring: left to give (sky), pending in open coupons (orange), given today (green), with the numbers beside it. A smaller ring shows the Time Vault against its capacity, plus time locked in open coupons.

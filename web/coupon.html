@@ -12,7 +12,7 @@
 <body class="coupon-page">
 <div class="stripe"></div>
 <div class="topbar">
-  <a href="/"><img src="/static/flag.png" alt=""><span class="brand">Time for UBI</span></a>
+  <a href="/"><img src="/static/flag.png" alt="Time for UBI"></a>
 </div>
 <main>
   <div class="ticket">
@@ -28,6 +28,13 @@
       <p class="hint" id="help"></p>
     </div>
   </div>
+  <footer>
+    <nav class="sites" aria-label="Time for UBI websites">
+      <a href="https://ubi.education" data-ext>The book</a>
+      <a href="https://ubi.vision" data-ext>The spec</a>
+      <a href="https://ubi.world" data-ext>The ledger</a>
+    </nav>
+  </footer>
 </main>
 <script>
 const $ = id => document.getElementById(id);
@@ -87,6 +94,11 @@ $('redeemBtn').addEventListener('click', async () => {
     })[r.error] || 'The coupon could not be received. Please try again.';
     $('redeemBtn').disabled = false;
   }
+});
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[data-ext]'); if (!a) return;
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg && tg.openLink) { e.preventDefault(); tg.openLink(a.href); }
 });
 load();
 </script>

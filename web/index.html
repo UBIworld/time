@@ -12,8 +12,7 @@
 <body>
 <div class="stripe"></div>
 <div class="topbar">
-  <img src="/static/flag.png" alt="">
-  <span class="brand">Time for UBI</span>
+  <img src="/static/flag.png" alt="Time for UBI">
   <button type="button" class="handle" id="handle" hidden aria-label="Copy my handle">
     <span id="handleText"></span>
     <svg class="ico-copy" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
@@ -42,8 +41,10 @@
       <li><span class="dot d-pending"></span><span class="lg-name">Pending in coupons</span><span class="lg-val num" id="lgPending">—</span></li>
       <li><span class="dot d-given"></span><span class="lg-name">Given today</span><span class="lg-val num" id="lgGiven">—</span></li>
     </ul>
-    <div class="hero-sub">Out of 24h. At midnight UTC, in <span class="countdown num" id="countdown">—</span>,
-      what is left flows to the Universal Circles.</div>
+    <div class="dayline">
+      <div class="dayline-head"><span class="dayline-label">A new 24 hours arrive in</span><span class="dayline-count num" id="countdown">—</span></div>
+      <p>At midnight UTC. Whatever you have not given by then flows to the Universal Circles, for everyone.</p>
+    </div>
 
     <div class="vault">
       <svg class="ring ring-sm" viewBox="0 0 80 80" role="img" aria-label="How full your Time Vault is">
@@ -54,7 +55,7 @@
       <div class="vault-text">
         <span class="hero-label">Time Vault</span>
         <div class="vault-value serif num" id="vault">—</div>
-        <div class="vault-sub">Time others gave you. Holds up to <span class="num" id="cap">—</span>.<span id="vaultPending"></span></div>
+        <div class="vault-sub">Time others have given you. It never expires. Holds up to <span class="num" id="cap">—</span>.<span id="vaultPending"></span></div>
       </div>
     </div>
   </div>
@@ -150,7 +151,14 @@
     <p class="empty" id="txsEmpty" hidden>Nothing yet. Time you give or receive will be listed here.</p>
   </section>
 
-  <footer><a href="/logout">Log out</a></footer>
+  <footer>
+    <nav class="sites" aria-label="Time for UBI websites">
+      <a href="https://ubi.education" data-ext>The book</a>
+      <a href="https://ubi.vision" data-ext>The spec</a>
+      <a href="https://ubi.world" data-ext>The ledger</a>
+    </nav>
+    <a class="logout" href="/logout">Log out</a>
+  </footer>
 </main>
 
 <div class="login" id="loginBox" hidden>
@@ -168,6 +176,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
+const fmtHM = s => { s = Math.max(0, s|0); return `${s/3600|0}h ${pad(s%3600/60|0)}m`; };
 const fmt = s => { s = Math.max(0, s|0); return `${s/3600|0}h ${pad(s%3600/60|0)}m ${pad(s%60)}s`; };
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 let resetIn = null, myHandle = '', lockHandle = '';
@@ -209,9 +218,9 @@ async function load(){
   $('loginBox').hidden = true; $('app').hidden = false;
   myHandle = me.handle;
   $('handleText').textContent = me.handle; $('handle').hidden = false;
-  $('wallet').textContent = me.wallet_text;
-  $('vault').textContent = me.vault_text;
-  $('cap').textContent = fmt(me.vault_capacity);
+  $('wallet').textContent = fmtHM(me.wallet);
+  $('vault').textContent = fmtHM(me.vault);
+  $('cap').textContent = fmtHM(me.vault_capacity);
   drawRings(me);
   resetIn = me.next_reset_in; $('countdown').textContent = fmt(resetIn);
 
@@ -263,11 +272,11 @@ function drawRings(me){
   arc($('segGiven'), 80, 0, given, day);
   arc($('segPending'), 80, given, pend, day);
   arc($('segLeft'), 80, given + pend, left, day);
-  $('lgLeft').textContent = fmt(left); $('lgPending').textContent = fmt(pend); $('lgGiven').textContent = fmt(given);
+  $('lgLeft').textContent = fmtHM(left); $('lgPending').textContent = fmtHM(pend); $('lgGiven').textContent = fmtHM(given);
   const cap = me.vault_capacity, held = me.vault, vp = me.vault_pending;
   arc($('vsegHeld'), 31, 0, held, cap);
   arc($('vsegPending'), 31, held, vp, cap);
-  $('vaultPending').textContent = vp > 0 ? ` ${fmt(vp)} more is locked in open coupons.` : '';
+  $('vaultPending').textContent = vp > 0 ? ` ${fmtHM(vp)} more is locked in open coupons.` : '';
 }
 
 setInterval(() => { if (resetIn !== null) { resetIn -= 1; $('countdown').textContent = fmt(resetIn); if (resetIn <= 0) load(); } }, 1000);
@@ -358,6 +367,13 @@ $('discoverable').addEventListener('change', async e => {
   const box = e.target, want = box.checked;
   const r = await api('/api/me/discoverable', {on: want});
   if (!r.ok) { box.checked = !want; $('discHint').textContent = r.error === 'no_username' ? 'Your Telegram account has no @name, so there is nothing for people to look up. Set one in Telegram settings first.' : 'That did not save. Please try again.'; }
+});
+
+// Links to the UBI sites: inside Telegram they open in its own browser.
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[data-ext]'); if (!a) return;
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg && tg.openLink) { e.preventDefault(); tg.openLink(a.href); }
 });
 
 // Copy the handle: modern clipboard first, a hidden textarea where a webview refuses it.
