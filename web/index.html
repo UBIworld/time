@@ -65,6 +65,10 @@
 
     <div class="give" id="giveBox">
       <form id="couponForm">
+        <div class="for-chip" id="forChip" hidden>
+          <span>For <span class="mono" id="forHandle"></span>. Only they can open it.</span>
+          <button type="button" id="forClear" aria-label="Make it open to anyone">Open to anyone</button>
+        </div>
         <div class="timepick">
           <input type="number" id="h" min="0" max="48" value="0" inputmode="numeric" aria-label="Hours"><span class="unit">h</span>
           <input type="number" id="m" min="0" max="59" value="30" inputmode="numeric" aria-label="Minutes"><span class="unit">m</span>
@@ -120,6 +124,20 @@
     <div class="msg" id="redeemMsg"></div>
   </section>
 
+  <section id="contactsSection">
+    <h2>Contacts</h2>
+    <p class="lede">People you have given to or received from. Tap Give to make a coupon only they can open.</p>
+    <ul class="list" id="contacts"></ul>
+    <p class="empty" id="contactsEmpty" hidden>No contacts yet. Anyone you exchange time with appears here.</p>
+    <form id="findForm" class="receive">
+      <input type="text" id="findName" placeholder="Telegram name, e.g. @anna" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button type="submit" class="btn">Find</button>
+    </form>
+    <div class="msg" id="findMsg"></div>
+    <label class="switch-row"><input type="checkbox" id="discoverable"><span>Let people find me by my Telegram name</span></label>
+    <p class="hint" id="discHint">Off by default. When on, someone who types your @name here sees only your UBI handle, never the other way round.</p>
+  </section>
+
   <section>
     <h2>Coupons you made</h2>
     <ul class="list" id="coupons"></ul>
@@ -152,7 +170,7 @@ const $ = id => document.getElementById(id);
 const pad = n => String(n).padStart(2, '0');
 const fmt = s => { s = Math.max(0, s|0); return `${s/3600|0}h ${pad(s%3600/60|0)}m ${pad(s%60)}s`; };
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-let resetIn = null, myHandle = '';
+let resetIn = null, myHandle = '', lockHandle = '';
 
 // Server timestamps are "YYYY-MM-DD HH:MM:SS" in UTC. Say them the way a person would.
 function parseUTC(s){ const m = /^(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d)/.exec(s || ''); return m ? Date.UTC(+m[1], m[2]-1, +m[3], +m[4], +m[5]) : null; }
@@ -208,6 +226,20 @@ async function load(){
   });
   $('couponsEmpty').hidden = me.coupons.length > 0;
 
+  const ct = $('contacts'); ct.innerHTML = '';
+  me.contacts.forEach(c => {
+    const li = document.createElement('li');
+    li.innerHTML = `<div class="row"><div class="row-main"><div class="row-amount mono-h">${esc(c.handle)}</div>
+      <div class="row-sub">${c.source === 'coupon' ? 'Exchanged time' : c.source === 'telegram' ? 'Found by Telegram name' : 'Added by hand'}</div></div>
+      <button type="button" class="chip-btn" data-give="${esc(c.handle)}">Give</button>
+      <button type="button" class="chip-btn quiet" data-remove="${esc(c.handle)}" aria-label="Remove ${esc(c.handle)}">Remove</button></div>`;
+    ct.appendChild(li);
+  });
+  $('contactsEmpty').hidden = me.contacts.length > 0;
+  $('discoverable').checked = me.discoverable; $('discoverable').dataset.hasUsername = me.has_username ? '1' : '';
+  if (!me.has_username) $('discHint').textContent = 'Your Telegram account has no @name, so there is nothing for people to look up. Set one in Telegram settings first.';
+
+
   const tl = $('txs'); tl.innerHTML = '';
   me.transactions.forEach(t => {
     const li = document.createElement('li');
@@ -251,21 +283,23 @@ $('couponForm').addEventListener('submit', async e => {
   msg.textContent = ''; msg.className = 'msg';
   if (secs < 60) { msg.textContent = 'Choose at least one minute.'; msg.className = 'msg err'; return; }
   $('makeBtn').disabled = true;
-  const r = await api('/api/coupon', {amount_seconds: secs, validity_seconds: v ? +v : null});
+  const r = await api('/api/coupon', {amount_seconds: secs, validity_seconds: v ? +v : null, lock_handle: lockHandle || null});
   $('makeBtn').disabled = false;
   if (!r.ok) {
     msg.className = 'msg err';
     msg.textContent = r.error === 'insufficient_balance'
       ? `That is more than you have. You can give up to ${fmt(r.available)} right now (Wallet and Vault together).`
+      : r.error === 'unknown_contact' ? 'That person is no longer in your contacts.'
       : 'The coupon could not be made. Please try again.';
     return;
   }
-  const c = r.coupon;
+  const c = r.coupon, forWho = lockHandle;
+  setLock('');
   $('qrAmount').textContent = c.amount_text;
   $('qrFrom').textContent = myHandle;
   $('qrImg').src = c.qr + '?t=' + Date.now();
   $('qrLink').textContent = c.link;
-  $('qrExpiry').innerHTML = `Can be opened until <strong>${esc(sayWhen(c.expires_at))}</strong>.` +
+  $('qrExpiry').innerHTML = (forWho ? `Made for <span class="mono">${esc(forWho)}</span>. Only they can open it.<br>` : '') + `Can be opened until <strong>${esc(sayWhen(c.expires_at))}</strong>.` +
     (r.capped_to_midnight && v ? '<br><span class="hint">Part of it came from your Daily Wallet, so it ends at midnight like the Wallet does.</span>' : '');
   $('shareBtn').hidden = !navigator.share;
   $('copyBtn').textContent = 'Copy link';
@@ -297,6 +331,33 @@ $('codeForm').addEventListener('submit', async e => {
   const r = await api('/auth/code', {code: $('loginCode').value});
   if (r.ok) { $('loginCode').value = ''; $('codeMsg').textContent = ''; load(); }
   else $('codeMsg').textContent = 'That code did not work, or it was already used. Send /app again for a fresh one.';
+});
+
+// Contacts
+function setLock(h){
+  lockHandle = h || '';
+  $('forChip').hidden = !lockHandle; $('forHandle').textContent = lockHandle;
+}
+$('forClear').addEventListener('click', () => setLock(''));
+$('contacts').addEventListener('click', async e => {
+  const g = e.target.closest('[data-give]'), rm = e.target.closest('[data-remove]');
+  if (g) { setLock(g.dataset.give); $('qr').hidden = true; $('giveBox').hidden = false; $('giveBox').scrollIntoView({behavior: 'smooth', block: 'start'}); }
+  if (rm) { if (lockHandle === rm.dataset.remove) setLock(''); await api('/api/contacts/remove', {handle: rm.dataset.remove}); load(); }
+});
+$('findForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const m = $('findMsg'); m.textContent = ''; m.className = 'msg';
+  const name = $('findName').value.trim(); if (!name) return;
+  const r = await api('/api/contacts/find', {username: name});
+  if (r.ok) { m.className = 'msg ok'; m.textContent = `Added ${r.handle} to your contacts.`; $('findName').value = ''; load(); return; }
+  m.className = 'msg err';
+  m.textContent = r.error === 'slow_down' ? 'Too many searches. Try again in a few minutes.'
+    : 'No one with that name can be found. They may not use Time for UBI yet, or they keep their name private.';
+});
+$('discoverable').addEventListener('change', async e => {
+  const box = e.target, want = box.checked;
+  const r = await api('/api/me/discoverable', {on: want});
+  if (!r.ok) { box.checked = !want; $('discHint').textContent = r.error === 'no_username' ? 'Your Telegram account has no @name, so there is nothing for people to look up. Set one in Telegram settings first.' : 'That did not save. Please try again.'; }
 });
 
 // Copy the handle: modern clipboard first, a hidden textarea where a webview refuses it.

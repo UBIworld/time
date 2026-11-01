@@ -31,6 +31,7 @@ from typing import Optional
 import aiosqlite
 
 import config
+import contacts
 from database import DB_PATH, CIRCLE_KEYS
 
 try:
@@ -403,6 +404,10 @@ async def redeem_coupon(coupon_id: str, redeemer_telegram_id: int) -> dict:
             suffix="ovf",
         )
     _write_signed_coupon_status(coupon)
+    try:
+        await contacts.link_users(coupon["issuer_id"], redeemer["id"], "coupon")
+    except Exception:  # a contact list must never undo a redemption that already happened
+        logger.exception("could not link contacts after redemption")
     return {
         "success": True,
         "coupon": coupon,

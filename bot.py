@@ -35,6 +35,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 import config
+import contacts
 import coupons
 import database as db
 import webauth
@@ -1391,6 +1392,7 @@ async def main():
     await db.init_db()
     await coupons.init_coupons_schema()
     await webauth.init_webauth_schema()
+    await contacts.init_contacts_schema()
     logger.info("Database initialized.")
 
     global BOT_USERNAME

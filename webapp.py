@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from aiohttp import web
 
 import config
+import contacts
 import coupons
 import database as db
 import webauth
@@ -60,6 +61,21 @@ def _rate_limited(ip: str) -> bool:
     while q and q[0] < now - CODE_WINDOW:
         q.popleft()
     if len(q) >= CODE_ATTEMPTS:
+        return True
+    q.append(now)
+    return False
+
+
+_lookups: dict[int, deque] = defaultdict(deque)
+LOOKUPS_PER_WINDOW = 20
+
+
+def _lookup_limited(telegram_id: int) -> bool:
+    now = time.monotonic()
+    q = _lookups[telegram_id]
+    while q and q[0] < now - CODE_WINDOW:
+        q.popleft()
+    if len(q) >= LOOKUPS_PER_WINDOW:
         return True
     q.append(now)
     return False
@@ -169,7 +185,19 @@ async def security_middleware(request: web.Request, handler):
         "frame-ancestors https://web.telegram.org https://*.telegram.org")
     h.setdefault("Referrer-Policy", "no-referrer")
     h.setdefault("X-Content-Type-Options", "nosniff")
+    # Cloudflare sits in front. Pages and assets must be revalidated, otherwise a new
+    # version stays invisible for hours. Coupon QR images set their own long cache.
+    if request.path.startswith("/static/") or resp.content_type == "text/html":
+        h["Cache-Control"] = "no-cache"
     return resp
+
+
+def _with_asset_versions(html: str) -> str:
+    """Add ?v=<mtime> to local asset links so a changed file is fetched at once."""
+    v = int(max((f.stat().st_mtime for f in (WEB_DIR / "static").iterdir()), default=0))
+    for name in ("app.css",):
+        html = html.replace(f'/static/{name}"', f'/static/{name}?v={v}"')
+    return html
 
 
 def _own_origin() -> str:
@@ -183,7 +211,7 @@ def _own_origin() -> str:
 
 async def index(request: web.Request):
     html = (WEB_DIR / "index.html").read_text()
-    html = html.replace("__BOT_USERNAME__", BOT_USERNAME)
+    html = _with_asset_versions(html.replace("__BOT_USERNAME__", BOT_USERNAME))
     return web.Response(text=html, content_type="text/html")
 
 
@@ -194,7 +222,7 @@ async def coupon_public_page(request: web.Request):
     html = html.replace("__BOT_USERNAME__", BOT_USERNAME).replace(
         '"__COUPON_ID__"', json.dumps(cid)
     )
-    return web.Response(text=html, content_type="text/html")
+    return web.Response(text=_with_asset_versions(html), content_type="text/html")
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +277,59 @@ async def api_me(request: web.Request):
             for t in tx
         ],
         "coupons": [_coupon_view(c) for c in my_coupons],
+        "contacts": [{"handle": c["handle"], "source": c["source"]} for c in await contacts.list_contacts(user["telegram_id"])],
+        "discoverable": bool(user.get("discoverable")),
+        "has_username": bool(user.get("username")),
     })
+
+
+async def api_contacts_find(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    if _lookup_limited(user["telegram_id"]):
+        return _json({"ok": False, "error": "slow_down"}, 429)
+    body = await read_json(request)
+    handle = await contacts.find_by_username(str(body.get("username", "")))
+    # Same answer whether the person does not exist or has not opted in.
+    if handle is None or handle == user["handle_display"]:
+        return _json({"ok": False, "error": "not_found"}, 404)
+    await contacts.add_contact_by_handle(user["telegram_id"], handle, "telegram")
+    return _json({"ok": True, "handle": handle})
+
+
+async def api_contacts_add(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    if _lookup_limited(user["telegram_id"]):
+        return _json({"ok": False, "error": "slow_down"}, 429)
+    body = await read_json(request)
+    r = await contacts.add_contact_by_handle(user["telegram_id"], str(body.get("handle", "")))
+    if not r["success"]:
+        return _json({"ok": False, "error": r["error"]}, 404 if r["error"] == "not_found" else 400)
+    return _json({"ok": True, "handle": r["handle"]})
+
+
+async def api_contacts_remove(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    body = await read_json(request)
+    await contacts.remove_contact(user["telegram_id"], str(body.get("handle", "")))
+    return _json({"ok": True})
+
+
+async def api_discoverable(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    body = await read_json(request)
+    on = bool(body.get("on"))
+    if on and not user.get("username"):
+        return _json({"ok": False, "error": "no_username"}, 400)
+    await contacts.set_discoverable(user["telegram_id"], on)
+    return _json({"ok": True, "discoverable": on})
 
 
 async def api_coupon_create(request: web.Request):
@@ -267,7 +347,15 @@ async def api_coupon_create(request: web.Request):
     validity = body.get("validity_seconds")
     validity = int(validity) if validity else None
 
-    result = await coupons.issue_coupon(user["telegram_id"], amount, validity)
+    lock = body.get("lock_handle")
+    if lock:
+        lock = str(lock).strip().lower()
+        # A coupon can only be made for someone in your own contacts.
+        if not await contacts.is_contact(user["telegram_id"], lock):
+            return _json({"ok": False, "error": "unknown_contact"}, 400)
+    else:
+        lock = None
+    result = await coupons.issue_coupon(user["telegram_id"], amount, validity, lock)
     if not result["success"]:
         return _json({"ok": False, "error": result["error"], "available": result.get("available")}, 400)
     c = result["coupon"]
@@ -338,6 +426,7 @@ async def on_startup(app: web.Application):
     await db.init_db()
     await coupons.init_coupons_schema()
     await webauth.init_webauth_schema()
+    await contacts.init_contacts_schema()
     logger.info("Web app on http://127.0.0.1:%d  public %s  bot @%s", WEB_PORT, WEB_PUBLIC_URL, BOT_USERNAME)
 
 
@@ -352,6 +441,10 @@ def make_app() -> web.Application:
         web.get("/logout", logout),
         web.get("/api/me", api_me),
         web.post("/api/coupon", api_coupon_create),
+        web.post("/api/contacts/find", api_contacts_find),
+        web.post("/api/contacts/add", api_contacts_add),
+        web.post("/api/contacts/remove", api_contacts_remove),
+        web.post("/api/me/discoverable", api_discoverable),
         web.get("/api/coupon/{id}", api_coupon_get),
         web.get("/api/coupon/{id}/qr.png", api_coupon_qr),
         web.post("/api/redeem", api_redeem),
