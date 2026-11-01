@@ -12,7 +12,11 @@
 <body>
 <div class="stripe"></div>
 <div class="topbar">
-  <img src="/static/flag.png" alt="Time for UBI">
+  <button type="button" class="back" id="backBtn" hidden aria-label="Back">
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+  </button>
+  <img src="/static/flag.png" alt="Time for UBI" id="flagImg">
+  <span class="page-title" id="pageTitle" hidden></span>
   <button type="button" class="handle" id="handle" hidden aria-label="Copy my handle">
     <span id="handleText"></span>
     <svg class="ico-copy" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
@@ -22,7 +26,7 @@
 
 <main id="app" hidden>
 
-  <div class="hero">
+  <div class="hero" data-view="home">
     <div class="tabs" role="tablist" aria-label="Which time to show">
       <button type="button" class="tab on" id="tabDay" role="tab" aria-selected="true">Today</button>
       <button type="button" class="tab" id="tabVault" role="tab" aria-selected="false">Vault</button>
@@ -70,16 +74,16 @@
     </div>
 
     <div class="actions">
-      <button type="button" class="action" data-go="giveSection">
+      <button type="button" class="action" data-go="give">
         <span class="action-ico"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8"/></svg></span>Give</button>
-      <button type="button" class="action" data-go="receiveSection">
+      <button type="button" class="action" data-go="receive">
         <span class="action-ico"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 7L7 17M15 17H7V9"/></svg></span>Receive</button>
-      <button type="button" class="action" data-go="contactsSection">
+      <button type="button" class="action" data-go="contacts">
         <span class="action-ico"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5M16.5 5.2a3 3 0 0 1 0 5.6M18 14.8c2 .6 3.3 2.3 3.3 5.2"/></svg></span>Contacts</button>
     </div>
   </div>
 
-  <section id="giveSection">
+  <section id="giveSection" data-view="give" data-title="Give time" hidden>
     <h2>Give time</h2>
     <p class="lede">Choose an amount. You get a coupon to hand to someone, as a QR code or a link.</p>
 
@@ -134,7 +138,7 @@
     </div>
   </section>
 
-  <section id="receiveSection">
+  <section id="receiveSection" data-view="receive" data-title="Receive time" hidden>
     <h2>Receive time</h2>
     <p class="lede">Someone handed you a coupon? Paste its link or code. The time lands in your Vault.</p>
     <form id="redeemForm" class="receive">
@@ -144,7 +148,7 @@
     <div class="msg" id="redeemMsg"></div>
   </section>
 
-  <section id="contactsSection">
+  <section id="contactsSection" data-view="contacts" data-title="Contacts" hidden>
     <h2>Contacts</h2>
     <p class="lede">People you have given to or received from. Tap Give to make a coupon only they can open.</p>
     <ul class="list" id="contacts"></ul>
@@ -158,19 +162,19 @@
     <p class="hint" id="discHint">Off by default. When on, someone who types your @name here sees only your UBI handle, never the other way round.</p>
   </section>
 
-  <section>
+  <section data-view="home">
     <h2>Coupons you made</h2>
     <ul class="list" id="coupons"></ul>
     <p class="empty" id="couponsEmpty" hidden>None yet. Your first coupon will appear here, with what happened to it.</p>
   </section>
 
-  <section>
+  <section data-view="home">
     <h2>Given and received</h2>
     <ul class="list" id="txs"></ul>
     <p class="empty" id="txsEmpty" hidden>Nothing yet. Time you give or receive will be listed here.</p>
   </section>
 
-  <footer>
+  <footer data-view="home">
     <nav class="sites" aria-label="Time for UBI websites">
       <a href="https://ubi.education" data-ext>The book</a>
       <a href="https://ubi.vision" data-ext>The spec</a>
@@ -308,11 +312,35 @@ function showTab(which){
 $('tabDay').addEventListener('click', () => showTab('day'));
 $('tabVault').addEventListener('click', () => showTab('vault'));
 
-// Action buttons scroll to their section
+// Pages: Home, Give, Receive, Contacts. The address hash says which one is open, so the
+// browser's back button, a refresh and Telegram's back button all behave.
+const VIEWS = ['home', 'give', 'receive', 'contacts'];
+function viewFromHash(){ const v = location.hash.replace('#', ''); return VIEWS.includes(v) ? v : 'home'; }
+function render(){
+  const v = viewFromHash();
+  document.querySelectorAll('[data-view]').forEach(el => { el.hidden = el.dataset.view !== v; });
+  document.body.dataset.page = v;
+  const sec = document.querySelector(`section[data-view="${v}"]`);
+  $('backBtn').hidden = v === 'home'; $('flagImg').hidden = v !== 'home';
+  $('pageTitle').hidden = v === 'home'; $('pageTitle').textContent = sec ? sec.dataset.title : '';
+  if (v === 'give') { const ticketOpen = !$('qr').hidden; $('giveBox').hidden = ticketOpen; }
+  window.scrollTo(0, 0);
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg && tg.BackButton) { v === 'home' ? tg.BackButton.hide() : tg.BackButton.show(); }
+}
+function go(v){
+  if (v === 'home') { return goBack(); }
+  history.pushState({inApp: true}, '', '#' + v); render();
+}
+function goBack(){
+  if (history.state && history.state.inApp) history.back();
+  else { history.replaceState(null, '', location.pathname); render(); }
+}
+window.addEventListener('popstate', render);
+$('backBtn').addEventListener('click', goBack);
+{ const tg = window.Telegram && window.Telegram.WebApp; if (tg && tg.BackButton) tg.BackButton.onClick(goBack); }
 document.querySelector('.actions').addEventListener('click', e => {
-  const b = e.target.closest('[data-go]'); if (!b) return;
-  if (b.dataset.go === 'giveSection') { $('qr').hidden = true; $('giveBox').hidden = false; }
-  $(b.dataset.go).scrollIntoView({behavior: 'smooth', block: 'start'});
+  const b = e.target.closest('[data-go]'); if (b) go(b.dataset.go);
 });
 
 setInterval(() => { if (resetIn !== null) { resetIn -= 1; $('countdown').textContent = fmt(resetIn); if (resetIn <= 0) load(); } }, 1000);
@@ -351,10 +379,10 @@ $('couponForm').addEventListener('submit', async e => {
   $('copyBtn').onclick = () => navigator.clipboard.writeText(c.link).then(() => { $('copyBtn').textContent = 'Copied'; setTimeout(() => $('copyBtn').textContent = 'Copy link', 1500); });
   $('shareBtn').onclick = () => navigator.share({title: 'A time coupon for you', text: `${c.amount_text} of time, from ${myHandle}`, url: c.link}).catch(() => {});
   $('giveBox').hidden = true; $('qr').hidden = false;
-  $('qr').scrollIntoView({behavior: 'smooth', block: 'start'});
+  window.scrollTo({top: 0, behavior: 'smooth'});
   load();
 });
-$('againBtn').addEventListener('click', () => { $('qr').hidden = true; $('giveBox').hidden = false; $('giveBox').scrollIntoView({behavior: 'smooth', block: 'start'}); });
+$('againBtn').addEventListener('click', () => { $('qr').hidden = true; $('giveBox').hidden = false; window.scrollTo({top: 0, behavior: 'smooth'}); });
 
 $('redeemForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -386,7 +414,7 @@ function setLock(h){
 $('forClear').addEventListener('click', () => setLock(''));
 $('contacts').addEventListener('click', async e => {
   const g = e.target.closest('[data-give]'), rm = e.target.closest('[data-remove]');
-  if (g) { setLock(g.dataset.give); $('qr').hidden = true; $('giveBox').hidden = false; $('giveBox').scrollIntoView({behavior: 'smooth', block: 'start'}); }
+  if (g) { setLock(g.dataset.give); $('qr').hidden = true; $('giveBox').hidden = false; go('give'); }
   if (rm) { if (lockHandle === rm.dataset.remove) setLock(''); await api('/api/contacts/remove', {handle: rm.dataset.remove}); load(); }
 });
 $('findForm').addEventListener('submit', async e => {
@@ -428,7 +456,7 @@ $('handle').addEventListener('click', async () => {
   }
 });
 
-tryWebAppLogin().then(load);
+tryWebAppLogin().then(load).then(render);
 </script>
 </body>
 </html>

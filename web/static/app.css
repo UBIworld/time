@@ -44,7 +44,7 @@ button,input,select{font:inherit;color:inherit}
 /* Top bar */
 .topbar{display:flex;align-items:center;gap:.6rem;padding:.65rem 1rem;position:sticky;top:0;z-index:5;
   background:var(--bg);border-bottom:1px solid var(--rule)}
-.topbar a{display:contents}
+.topbar a:not(.back){display:contents}
 .topbar img{height:28px;width:auto;border-radius:2px;display:block}
 .topbar .brand{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:var(--muted)}
 .topbar .handle{margin-left:auto;display:inline-flex;align-items:center;gap:.45rem;cursor:pointer;
@@ -221,3 +221,12 @@ footer .logout{color:var(--muted);font-size:.85rem}
   background:var(--action);color:var(--action-fg)}
 .action:active .action-ico{background:var(--action-press)}
 .action:focus-visible{outline:2px solid var(--action);outline-offset:3px;border-radius:12px}
+
+/* Back arrow and page title in the top bar */
+.back{display:flex;align-items:center;justify-content:center;width:2.4rem;height:2.4rem;margin-left:-.5rem;background:none;border:0;border-radius:50%;
+  color:var(--fg);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.back:active{background:var(--bg-elev)}
+.back:focus-visible{outline:2px solid var(--action);outline-offset:2px}
+.page-title{font-size:1.05rem;font-weight:700;letter-spacing:-.01em}
+body:not([data-page="home"]) section>h2{display:none}
+body:not([data-page="home"]) section{padding-top:1.1rem}

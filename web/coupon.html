@@ -12,7 +12,9 @@
 <body class="coupon-page">
 <div class="stripe"></div>
 <div class="topbar">
+  <a href="/" class="back" id="backLink" aria-label="Back to my wallet"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></a>
   <a href="/"><img src="/static/flag.png" alt="Time for UBI"></a>
+  <span class="page-title">Time coupon</span>
 </div>
 <main>
   <div class="ticket">
@@ -95,6 +97,10 @@ $('redeemBtn').addEventListener('click', async () => {
     $('redeemBtn').disabled = false;
   }
 });
+$('backLink').addEventListener('click', e => {
+  try { if (document.referrer && new URL(document.referrer).origin === location.origin && history.length > 1) { e.preventDefault(); history.back(); } } catch (_) {}
+});
+{ const tg = window.Telegram && window.Telegram.WebApp; if (tg && tg.BackButton) { tg.BackButton.show(); tg.BackButton.onClick(() => { location.href = '/'; }); } }
 document.addEventListener('click', e => {
   const a = e.target.closest('a[data-ext]'); if (!a) return;
   const tg = window.Telegram && window.Telegram.WebApp;

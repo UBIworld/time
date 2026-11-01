@@ -5,6 +5,7 @@ Staging (`@timeubi_stagingbot`, app.ubi.world) runs the branch under review; `ma
 
 ## Unreleased (on staging, awaiting approval)
 
+- **Separate pages with a back arrow.** Give, Receive and Contacts are now their own pages (`#give`, `#receive`, `#contacts`) with a back arrow at the top left and the page title next to it. The browser's back button, a refresh and Telegram's own back button all work. The coupon page has the same arrow.
 - **Today / Vault switch** at the top of the wallet. Today shows the 24-hour ring; Vault shows the Vault ring with held, locked-in-coupons and room left. Each has a one-line note and a link to the spec ("How a day works", "How the Vault works").
 - **Action buttons** Give, Receive and Contacts under the ring; Give time now starts on the first screen.
 - The two-line day card is replaced by one compact line with the countdown.
