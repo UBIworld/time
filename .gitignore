@@ -26,3 +26,9 @@ nohup.out
 .DS_Store
 Thumbs.db
 .env.*
+
+# Backups and hand-made snapshots
+*.bak
+*.bak-*
+*.pre-*
+*.db.*

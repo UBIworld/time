@@ -1,15 +1,14 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+Versions are tagged `vX.Y.Z` on `main`. Each tag has a GitHub Release with the same notes.
+Staging (`@timeubi_stagingbot`, app.ubi.world) runs the branch under review; `main` is what has been approved.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## v0.1.0 · 2026-11-01
 
-## [Unreleased]
+First version with time coupons and a visual app.
 
-### Changed
-- **BREAKING:** Handle format simplified — removed `::` delimiters. Canonical local form is now `slot:slot:slot` (e.g. `house:cat:888`); federated form is `slot:slot:slot@node.domain` (e.g. `house:cat:888@cat.ubi.asia`). Existing nodes must run `migrations/001_drop_handle_delimiters.py` against their `ubi_bot.db` during the next deploy cycle.
-
-### Added
-- `migrations/001_drop_handle_delimiters.py` — idempotent, transactional migration script that strips `::` delimiters from `handle_display` values in the `users` table. Supports `--dry-run`.
-- Parser now accepts optional `@node.domain` suffix on handles (forward-compatible with federation; actual cross-node transfer not yet implemented).
+- **Time coupons.** `/coupon` makes a signed QR coupon. The time leaves the Wallet at issuance, whoever opens it first receives it, and an unopened coupon flows to the Universal Circles at expiry. `/coupons`, `/redeem`, `/start c_<id>`.
+- **Web wallet and Telegram Mini App** at app.ubi.world: balance, make a coupon, receive, coupon list, history. Login by one-time code, or automatically inside Telegram.
+- **Removed** the Blue/Red feedback signal and `/send`. There is one kind of time, and sending is by coupon.
+- **Security review fixes:** race-safe issuance and redemption, public coupon ids that never expose the bearer id, rate-limited login codes, CSP and origin checks.
+- Staging environment: separate bot, database and node keys, run by systemd.
