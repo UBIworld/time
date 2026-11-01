@@ -88,8 +88,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton(text="/balance"), KeyboardButton(text="/coupon")],
         [KeyboardButton(text="/coupons"), KeyboardButton(text="/history")],
         [KeyboardButton(text="/circles"), KeyboardButton(text="/handle")],
-        [KeyboardButton(text="/cc"),      KeyboardButton(text="/create")],
-        [KeyboardButton(text="/help")],
+        [KeyboardButton(text="/create"),  KeyboardButton(text="/help")],
     ],
     resize_keyboard=True,
     persistent=True,
@@ -396,6 +395,9 @@ async def cmd_circles(message: Message, state: FSMContext):
     body = "\n".join(lines)
     await message.answer(f"```\n{body}\n```", parse_mode="Markdown")
 
+    # Community Circles the user belongs to (this used to be a separate /cc command).
+    await _send_community_circles(message, quiet=True)
+
 
 # ---------------------------------------------------------------------------
 # /history — Transaction history
@@ -688,9 +690,8 @@ async def cmd_help(message: Message, state: FSMContext):
         "/app — Open your wallet (in Telegram, or a code for the browser)\n"
         "/history — Your recent transactions\n"
         "/handle — Display your Handle\n"
-        "/circles — Universal Circles balances\n\n"
+        "/circles — Universal Circles and your Community Circles, with balances\n\n"
         "🤗 Community Circles\n"
-        "/cc — List your Community Circles + balances\n"
         "/create — Start a new Community Circle (max 4)\n"
         "/invite — Invite a user to your circle (creator only)\n"
         "/fund — Contribute time to a circle you belong to\n"
@@ -748,8 +749,14 @@ def _invite_join_keyboard(invite_id: int) -> InlineKeyboardMarkup:
 @router.message(Command("cc"), StateFilter("*"))
 async def cmd_cc(message: Message, state: FSMContext):
     await state.clear()
+    await _send_community_circles(message)
+
+
+async def _send_community_circles(message: Message, quiet: bool = False):
     user = await db.get_user(message.from_user.id)
     if not user:
+        if quiet:
+            return
         await message.answer("You're not registered yet. Type /start to begin.")
         return
 
@@ -847,7 +854,7 @@ async def cb_create_circle_yes(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         f"🤗 Done! Your Community Circle \"{circle['name']}\" is live.\n\n"
         f"Use /invite to bring members in, /fund to contribute time, "
-        f"or /cc to see all your circles."
+        f"or /circles to see all your circles."
     )
 
 
@@ -1043,7 +1050,7 @@ async def cb_invite_accept(callback: CallbackQuery):
 
     await callback.message.answer(
         f"🤗 You've joined \"{circle_name}\"!\n"
-        f"Use /cc to see your circles, /fund to contribute time."
+        f"Use /circles to see your circles, /fund to contribute time."
     )
 
 

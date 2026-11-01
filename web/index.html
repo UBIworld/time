@@ -83,6 +83,13 @@
     </div>
   </div>
 
+  <nav class="menu" data-view="home" aria-label="More">
+    <button type="button" class="menu-row" data-go="circles"><span class="menu-name">Circles</span><span class="badge" id="inviteBadge" hidden></span><span class="chev"></span></button>
+    <button type="button" class="menu-row" data-go="history"><span class="menu-name">History</span><span class="chev"></span></button>
+    <button type="button" class="menu-row" data-go="handle"><span class="menu-name">My handle</span><span class="chev"></span></button>
+    <button type="button" class="menu-row" data-go="help"><span class="menu-name">Help</span><span class="chev"></span></button>
+  </nav>
+
   <section id="giveSection" data-view="give" data-title="Give time" hidden>
     <h2>Give time</h2>
     <p class="lede">Choose an amount. You get a coupon to hand to someone, as a QR code or a link.</p>
@@ -162,6 +169,61 @@
     <p class="hint" id="discHint">Off by default. When on, someone who types your @name here sees only your UBI handle, never the other way round.</p>
   </section>
 
+  <section id="circlesSection" data-view="circles" data-title="Circles" hidden>
+    <div class="invites" id="invites"></div>
+
+    <h3>Universal Circles</h3>
+    <p class="lede">Where unspent time goes at midnight, and expired coupons. Shared by everyone. <a href="https://ubi.vision/#universal-circles" data-ext>How they work</a></p>
+    <ul class="list" id="universal"></ul>
+
+    <h3>Your Community Circles</h3>
+    <p class="lede">Small groups that pool time for something they care about. You can be in up to <span id="circleLimit">4</span>.</p>
+    <ul class="list" id="community"></ul>
+    <p class="empty" id="communityEmpty" hidden>You are not in a Community Circle yet. Create one below, or wait for an invite.</p>
+
+    <div class="give" id="circleAction" hidden></div>
+
+    <form id="circleCreateForm" class="receive">
+      <input type="text" id="circleName" maxlength="64" placeholder="Name a new circle" autocomplete="off">
+      <button type="submit" class="btn">Create</button>
+    </form>
+    <div class="msg" id="circleMsg"></div>
+  </section>
+
+  <section id="historySection" data-view="history" data-title="History" hidden>
+    <ul class="list" id="historyList"></ul>
+    <p class="empty" id="historyEmpty" hidden>Nothing yet. Time you give or receive will be listed here.</p>
+  </section>
+
+  <section id="handleSection" data-view="handle" data-title="My handle" hidden>
+    <div class="handle-card">
+      <div class="ticket-kicker">Your handle</div>
+      <div class="handle-big" id="handleBig">—</div>
+      <button type="button" class="btn secondary" id="handleCopy2">Copy handle</button>
+      <p class="hint">On other nodes of the network you are <span class="mono" id="handleFed">—</span>.</p>
+    </div>
+    <p class="lede">A handle is three words, like <span class="mono">cat:chef:888</span>. Share it so people can find you, add you as a contact and make coupons only you can open. <a href="https://ubi.vision/#handles" data-ext>How handles work</a></p>
+  </section>
+
+  <section id="helpSection" data-view="help" data-title="Help" hidden>
+    <div class="faq">
+      <h3>Your time</h3>
+      <p>Every day at midnight UTC you receive 24 hours in your Daily Wallet. It cannot be saved: what you have not given by the next midnight flows to the Universal Circles.</p>
+      <h3>Time Vault</h3>
+      <p>Time other people give you goes into your Vault. It never expires. It holds up to 24 hours at the first tier.</p>
+      <h3>Coupons</h3>
+      <p>You give time by making a coupon, a QR code or a link. The time leaves your Wallet at once. The first person to open it receives it. If nobody opens it before it expires, the time flows to the Universal Circles. You can lock a coupon to one contact.</p>
+      <h3>Circles</h3>
+      <p>Universal Circles belong to everyone. Community Circles are small groups that pool time. You can create up to four, or join by invite.</p>
+      <h3>Learn more</h3>
+      <ul class="list links">
+        <li><a class="row" href="https://ubi.education" data-ext><div class="row-main"><div class="row-amount">The book</div><div class="row-sub">Why time can work as money</div></div><span class="chev"></span></a></li>
+        <li><a class="row" href="https://ubi.vision" data-ext><div class="row-main"><div class="row-amount">The spec</div><div class="row-sub">How the system works, in detail</div></div><span class="chev"></span></a></li>
+        <li><a class="row" href="https://ubi.world" data-ext><div class="row-main"><div class="row-amount">The ledger</div><div class="row-sub">Every transaction, public</div></div><span class="chev"></span></a></li>
+      </ul>
+    </div>
+  </section>
+
   <section data-view="home">
     <h2>Coupons you made</h2>
     <ul class="list" id="coupons"></ul>
@@ -169,7 +231,7 @@
   </section>
 
   <section data-view="home">
-    <h2>Given and received</h2>
+    <h2>Given and received <button type="button" class="see-all" data-go="history">See all</button></h2>
     <ul class="list" id="txs"></ul>
     <p class="empty" id="txsEmpty" hidden>Nothing yet. Time you give or receive will be listed here.</p>
   </section>
@@ -245,6 +307,9 @@ async function load(){
   $('vault').textContent = fmtHM(me.vault);
   $('cap').textContent = fmtHM(me.vault_capacity);
   drawRings(me);
+  myContacts = me.contacts.map(c => c.handle);
+  $('handleBig').textContent = me.handle; $('handleFed').textContent = me.federated_handle;
+  $('inviteBadge').hidden = !me.pending_invites; $('inviteBadge').textContent = me.pending_invites;
   resetIn = me.next_reset_in; $('countdown').textContent = fmt(resetIn);
 
   const cl = $('coupons'); cl.innerHTML = '';
@@ -314,7 +379,7 @@ $('tabVault').addEventListener('click', () => showTab('vault'));
 
 // Pages: Home, Give, Receive, Contacts. The address hash says which one is open, so the
 // browser's back button, a refresh and Telegram's back button all behave.
-const VIEWS = ['home', 'give', 'receive', 'contacts'];
+const VIEWS = ['home', 'give', 'receive', 'contacts', 'circles', 'history', 'handle', 'help'];
 function viewFromHash(){ const v = location.hash.replace('#', ''); return VIEWS.includes(v) ? v : 'home'; }
 function render(){
   const v = viewFromHash();
@@ -324,6 +389,8 @@ function render(){
   $('backBtn').hidden = v === 'home'; $('flagImg').hidden = v !== 'home';
   $('pageTitle').hidden = v === 'home'; $('pageTitle').textContent = sec ? sec.dataset.title : '';
   if (v === 'give') { const ticketOpen = !$('qr').hidden; $('giveBox').hidden = ticketOpen; }
+  if (v === 'circles') loadCircles();
+  if (v === 'history') loadHistory();
   window.scrollTo(0, 0);
   const tg = window.Telegram && window.Telegram.WebApp;
   if (tg && tg.BackButton) { v === 'home' ? tg.BackButton.hide() : tg.BackButton.show(); }
@@ -339,7 +406,7 @@ function goBack(){
 window.addEventListener('popstate', render);
 $('backBtn').addEventListener('click', goBack);
 { const tg = window.Telegram && window.Telegram.WebApp; if (tg && tg.BackButton) tg.BackButton.onClick(goBack); }
-document.querySelector('.actions').addEventListener('click', e => {
+document.addEventListener('click', e => {
   const b = e.target.closest('[data-go]'); if (b) go(b.dataset.go);
 });
 
@@ -431,6 +498,102 @@ $('discoverable').addEventListener('change', async e => {
   const box = e.target, want = box.checked;
   const r = await api('/api/me/discoverable', {on: want});
   if (!r.ok) { box.checked = !want; $('discHint').textContent = r.error === 'no_username' ? 'Your Telegram account has no @name, so there is nothing for people to look up. Set one in Telegram settings first.' : 'That did not save. Please try again.'; }
+});
+
+
+// ---- Circles ----
+let circleState = null, myContacts = [];
+const circleMsg = (t, ok) => { const m = $('circleMsg'); m.textContent = t; m.className = 'msg' + (t ? (ok ? ' ok' : ' err') : ''); };
+const circleErr = r => ({
+  limit: 'You are already in four Community Circles.', bad_name: 'Give the circle a name of up to 64 characters.',
+  not_creator: 'Only the person who made the circle can do that.', not_found: 'No one has that handle.',
+  self: 'You are already in your own circle.', invitee_full: 'That person is already in four circles.',
+  already_member: 'They are already in this circle.', invite_pending: 'They already have an invite waiting.',
+  insufficient_balance: `That is more than you have. You can give up to ${fmtHM(r.available || 0)} (Wallet and Vault together).`,
+  bad_amount: 'Choose at least one minute.', slow_down: 'Too many tries. Please wait a few minutes.'
+})[r.error] || 'That did not work. Please try again.';
+
+async function loadCircles(){
+  const r = await api('/api/circles'); if (!r.ok) return;
+  $('circleLimit').textContent = r.limit;
+  $('universal').innerHTML = r.universal.map(c => `<li><div class="row"><div class="row-main"><div class="row-amount" style="font-family:inherit">${esc(c.name)}</div></div><span class="num lg-val">${esc(fmtHM(c.seconds))}</span></div></li>`).join('') +
+    `<li><div class="row"><div class="row-main"><div class="row-amount" style="font-family:inherit">Total</div></div><span class="num lg-val">${esc(fmtHM(r.universal.reduce((a, c) => a + c.seconds, 0)))}</span></div></li>`;
+  $('invites').innerHTML = r.invites.map(i => `<div class="invite"><div><strong>${esc(i.circle_name)}</strong><div class="row-sub">You were invited to join.</div></div>
+    <button type="button" class="chip-btn" data-invite="${i.id}" data-accept="1">Join</button><button type="button" class="chip-btn quiet" data-invite="${i.id}">Ignore</button></div>`).join('');
+  const cl = $('community'); cl.innerHTML = '';
+  r.community.forEach(c => {
+    const li = document.createElement('li'); const mine = c.role === 'creator';
+    li.innerHTML = `<div class="circle"><div class="row-main"><div class="row-amount" style="font-family:inherit">${esc(c.name)}</div>
+      <div class="row-sub">${esc(fmtHM(c.balance))} pooled · ${c.members} member${c.members === 1 ? '' : 's'}${mine ? ' · you made it' : ''}</div></div>
+      <div class="circle-btns"><button type="button" class="chip-btn" data-circle="${c.id}" data-do="fund">Fund</button>
+      ${mine ? `<button type="button" class="chip-btn" data-circle="${c.id}" data-do="invite">Invite</button><button type="button" class="chip-btn quiet" data-circle="${c.id}" data-do="dissolve">Dissolve</button>` : ''}</div></div>`;
+    li.dataset.name = c.name; cl.appendChild(li);
+  });
+  $('communityEmpty').hidden = r.community.length > 0;
+  $('circleCreateForm').hidden = r.community.length >= r.limit;
+  circleState = {circles: r.community, available: r.available, limit: r.limit};
+}
+
+function openCircleAction(kind, id){
+  const c = circleState.circles.find(x => x.id === +id); if (!c) return;
+  const box = $('circleAction'); circleMsg('');
+  const head = `<div class="ticket-kicker">${kind === 'fund' ? 'Fund' : kind === 'invite' ? 'Invite to' : 'Dissolve'} ${esc(c.name)}</div>`;
+  if (kind === 'fund') box.innerHTML = head + `<div class="timepick"><input type="number" id="cfH" min="0" max="48" value="0" inputmode="numeric" aria-label="Hours"><span class="unit">h</span><input type="number" id="cfM" min="0" max="59" value="30" inputmode="numeric" aria-label="Minutes"><span class="unit">m</span></div>
+    <button type="button" class="btn" id="cfGo">Give to the circle</button><p class="hint">It comes from your Wallet first, then your Vault. You can give up to ${esc(fmtHM(circleState.available))}.</p><button type="button" class="btn quiet" id="cfCancel">Cancel</button>`;
+  if (kind === 'invite') box.innerHTML = head + `<input type="text" id="ciHandle" list="contactList" placeholder="animal:job:name" autocomplete="off" autocapitalize="off" spellcheck="false" class="field">
+    <datalist id="contactList">${myContacts.map(h => `<option value="${esc(h)}">`).join('')}</datalist>
+    <button type="button" class="btn" id="ciGo">Send invite</button><p class="hint">They get a message from the bot with Join and Ignore.</p><button type="button" class="btn quiet" id="cfCancel">Cancel</button>`;
+  if (kind === 'dissolve') box.innerHTML = head + `<p class="hint" style="margin-top:.4rem">This closes the circle for good. Its balance stays in the pool and nobody can add more.</p>
+    <div class="btnrow"><button type="button" class="btn" id="cdGo">Dissolve</button><button type="button" class="btn secondary" id="cfCancel">Keep it</button></div>`;
+  box.hidden = false; box.dataset.circle = id; box.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+
+$('community').addEventListener('click', e => { const b = e.target.closest('[data-do]'); if (b) openCircleAction(b.dataset.do, b.dataset.circle); });
+$('circleAction').addEventListener('click', async e => {
+  const id = $('circleAction').dataset.circle, t = e.target.closest('button'); if (!t) return;
+  if (t.id === 'cfCancel') { $('circleAction').hidden = true; return; }
+  if (t.id === 'cfGo') {
+    const secs = (+$('cfH').value || 0) * 3600 + (+$('cfM').value || 0) * 60;
+    t.disabled = true; const r = await api('/api/circles/fund', {circle_id: +id, amount_seconds: secs}); t.disabled = false;
+    if (r.ok) { $('circleAction').hidden = true; circleMsg(`You gave ${r.amount_text} to ${r.circle}.`, true); loadCircles(); load(); } else circleMsg(circleErr(r));
+  }
+  if (t.id === 'ciGo') {
+    t.disabled = true; const r = await api('/api/circles/invite', {circle_id: +id, handle: $('ciHandle').value.trim()}); t.disabled = false;
+    if (r.ok) { $('circleAction').hidden = true; circleMsg(`Invite sent to ${r.handle}.`, true); } else circleMsg(circleErr(r));
+  }
+  if (t.id === 'cdGo') {
+    t.disabled = true; const r = await api('/api/circles/dissolve', {circle_id: +id}); t.disabled = false;
+    if (r.ok) { $('circleAction').hidden = true; circleMsg(`${r.name} has been dissolved.`, true); loadCircles(); } else circleMsg(circleErr(r));
+  }
+});
+$('invites').addEventListener('click', async e => {
+  const b = e.target.closest('[data-invite]'); if (!b) return;
+  const r = await api('/api/circles/respond', {invite_id: +b.dataset.invite, accept: !!b.dataset.accept});
+  if (!r.ok) circleMsg(circleErr(r)); else circleMsg(b.dataset.accept ? 'You joined the circle.' : '', true);
+  loadCircles(); load();
+});
+$('circleCreateForm').addEventListener('submit', async e => {
+  e.preventDefault(); const name = $('circleName').value.trim(); if (!name) return;
+  const r = await api('/api/circles/create', {name});
+  if (r.ok) { $('circleName').value = ''; circleMsg(`${r.name} is live. Invite people to it.`, true); loadCircles(); } else circleMsg(circleErr(r));
+});
+
+// ---- History ----
+async function loadHistory(){
+  const r = await api('/api/history'); if (!r.ok) return;
+  const tl = $('historyList'); tl.innerHTML = '';
+  r.transactions.forEach(t => {
+    const li = document.createElement('li');
+    li.innerHTML = `<div class="row"><div class="row-main"><div class="row-amount num">${esc(t.amount_text)}</div>
+      <div class="row-sub">${t.direction === 'sent' ? 'Given to' : 'Received from'} <span class="mono">${esc(t.other)}</span></div></div><span class="row-when">${esc(sayWhen(t.at))}</span></div>`;
+    tl.appendChild(li);
+  });
+  $('historyEmpty').hidden = r.transactions.length > 0;
+}
+
+// ---- Handle ----
+$('handleCopy2').addEventListener('click', async () => {
+  if (await copyText(myHandle)) { $('handleCopy2').textContent = 'Copied'; setTimeout(() => $('handleCopy2').textContent = 'Copy handle', 1500); }
 });
 
 // Links to the UBI sites: inside Telegram they open in its own browser.

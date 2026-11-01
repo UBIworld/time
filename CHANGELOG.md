@@ -5,6 +5,9 @@ Staging (`@timeubi_stagingbot`, app.ubi.world) runs the branch under review; `ma
 
 ## Unreleased (on staging, awaiting approval)
 
+- **Everything the bot does is now in the app.** New pages: Circles (Universal Circles with balances; your Community Circles with Fund, Invite and Dissolve; invites with Join and Ignore; create a circle), History (last 100), My handle (copy, federated form), Help (how it works, links to the book, spec and ledger). They are listed under the action buttons; Circles shows a badge for waiting invites. Invites sent from the app reach the invitee as a bot message with Join and Ignore.
+- **Bot:** `/cc` is gone from the keyboard; `/circles` now shows the Universal Circles and your Community Circles together (`/cc` still works). Help text updated.
+- **Fix:** funding a circle is now one locked transaction, so two simultaneous requests from the bot and the app cannot overdraw a balance.
 - **Separate pages with a back arrow.** Give, Receive and Contacts are now their own pages (`#give`, `#receive`, `#contacts`) with a back arrow at the top left and the page title next to it. The browser's back button, a refresh and Telegram's own back button all work. The coupon page has the same arrow.
 - **Today / Vault switch** at the top of the wallet. Today shows the 24-hour ring; Vault shows the Vault ring with held, locked-in-coupons and room left. Each has a one-line note and a link to the spec ("How a day works", "How the Vault works").
 - **Action buttons** Give, Receive and Contacts under the ring; Give time now starts on the first screen.

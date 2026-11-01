@@ -230,3 +230,34 @@ footer .logout{color:var(--muted);font-size:.85rem}
 .page-title{font-size:1.05rem;font-weight:700;letter-spacing:-.01em}
 body:not([data-page="home"]) section>h2{display:none}
 body:not([data-page="home"]) section{padding-top:1.1rem}
+
+/* Menu list under the action buttons */
+.menu{margin-top:1rem;background:var(--bg-elev);border:1px solid var(--rule);border-radius:16px;overflow:hidden}
+.menu-row{display:flex;align-items:center;gap:.7rem;width:100%;padding:.95rem 1rem;background:none;border:0;border-top:1px solid var(--rule);
+  font-size:1.02rem;font-weight:600;color:var(--fg);cursor:pointer;text-align:left;-webkit-tap-highlight-color:transparent}
+.menu-row:first-child{border-top:0}
+.menu-row:active{background:var(--rule)}
+.menu-name{flex:1}
+.badge{background:var(--orange);color:#1d1d1b;border-radius:999px;font-size:.75rem;font-weight:800;padding:.1rem .5rem}
+.see-all{float:right;background:none;border:0;color:var(--accent);font-size:.9rem;font-weight:600;cursor:pointer;margin-top:.25rem}
+
+/* Circles */
+h3{font-size:1.05rem;font-weight:700;margin:1.4rem 0 .2rem}
+.circle{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+.circle .row-main{flex:1 1 55%}
+.circle-btns{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+#circleAction{margin:1rem 0}
+#circleAction .field,.field{width:100%;background:var(--field);border:1px solid var(--rule-strong);border-radius:12px;padding:.75rem;font-size:1rem;margin:.6rem 0 .8rem}
+#circleAction .btn{margin-top:.2rem}
+#circleAction .timepick{margin-top:.8rem}
+.invite{display:flex;align-items:center;gap:.5rem;padding:.8rem 1rem;margin-bottom:.8rem;background:var(--bg-elev);border:1px solid var(--orange);border-radius:14px}
+.invite>div{flex:1}
+#circleCreateForm{margin-top:1.2rem}
+
+/* Handle and help pages */
+.handle-card{text-align:center;background:var(--bg-ticket);border:1px solid var(--rule);border-radius:18px;padding:1.4rem 1.1rem;margin-bottom:1rem}
+.handle-big{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:1.5rem;font-weight:700;margin:.5rem 0 1rem;overflow-wrap:anywhere}
+.handle-card .mono,.lede .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fg)}
+.faq h3:first-child{margin-top:.2rem}
+.faq p{font-size:.95rem;color:var(--muted)}
+.links{margin-top:.5rem}

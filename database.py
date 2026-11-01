@@ -739,62 +739,66 @@ async def fund_circle(
     """
     Deduct amount_seconds from sender's wallet (then vault if needed),
     credit the circle's balance, and log the transaction.
-    Returns a result dict similar to execute_transfer.
-    Raises ValueError on insufficient_balance or not_member.
+    The balance check and the deduction happen in one locked transaction, because
+    the bot and the web app are two processes writing to the same file.
+    Raises ValueError on insufficient_balance, not_member, circle_closed.
     """
+    if amount_seconds <= 0:
+        raise ValueError("bad_amount")
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-
-        cursor = await db.execute(
-            "SELECT * FROM users WHERE telegram_id = ?", (sender_telegram_id,)
-        )
-        sender = await cursor.fetchone()
-        if sender is None:
-            raise ValueError("sender_not_found")
-        sender = dict(sender)
-
-        # Confirm sender is a member of this circle
-        cursor = await db.execute(
-            "SELECT 1 FROM circle_members WHERE circle_id = ? AND user_id = ?",
-            (circle_id, sender["id"]),
-        )
-        if not await cursor.fetchone():
-            raise ValueError("not_member")
-
-        # Check sufficient balance
-        wallet_balance = sender["daily_wallet"]
-        vault_balance = sender["time_vault"]
-        total_available = wallet_balance + vault_balance
-        if amount_seconds > total_available:
-            raise ValueError(f"insufficient_balance:{total_available}")
-
-        # Wallet first, vault second
-        wallet_part = min(amount_seconds, wallet_balance)
-        vault_part = amount_seconds - wallet_part
-        new_wallet = wallet_balance - wallet_part
-        new_vault = vault_balance - vault_part
-
-        await db.execute(
-            "UPDATE users SET daily_wallet = ?, time_vault = ? WHERE id = ?",
-            (new_wallet, new_vault, sender["id"]),
-        )
-        await db.execute(
-            "UPDATE community_circles SET balance = balance + ? WHERE id = ?",
-            (amount_seconds, circle_id),
-        )
-        await db.execute(
-            "INSERT INTO circle_transactions (circle_id, sender_id, amount) VALUES (?, ?, ?)",
-            (circle_id, sender["id"], amount_seconds),
-        )
-        await db.commit()
-
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await db.execute(
+                "SELECT * FROM users WHERE telegram_id = ?", (sender_telegram_id,)
+            )
+            sender = await cursor.fetchone()
+            if sender is None:
+                raise ValueError("sender_not_found")
+            sender = dict(sender)
+            cursor = await db.execute(
+                "SELECT cc.dissolved FROM circle_members cm JOIN community_circles cc ON cc.id = cm.circle_id "
+                "WHERE cm.circle_id = ? AND cm.user_id = ?",
+                (circle_id, sender["id"]),
+            )
+            member = await cursor.fetchone()
+            if member is None:
+                raise ValueError("not_member")
+            if member["dissolved"]:
+                raise ValueError("circle_closed")
+            wallet_balance = sender["daily_wallet"]
+            vault_balance = sender["time_vault"]
+            total_available = wallet_balance + vault_balance
+            if amount_seconds > total_available:
+                raise ValueError(f"insufficient_balance:{total_available}")
+            wallet_part = min(amount_seconds, wallet_balance)
+            vault_part = amount_seconds - wallet_part
+            cursor = await db.execute(
+                "UPDATE users SET daily_wallet = daily_wallet - ?, time_vault = time_vault - ? "
+                "WHERE id = ? AND daily_wallet >= ? AND time_vault >= ?",
+                (wallet_part, vault_part, sender["id"], wallet_part, vault_part),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"insufficient_balance:{total_available}")
+            await db.execute(
+                "UPDATE community_circles SET balance = balance + ? WHERE id = ?",
+                (amount_seconds, circle_id),
+            )
+            await db.execute(
+                "INSERT INTO circle_transactions (circle_id, sender_id, amount) VALUES (?, ?, ?)",
+                (circle_id, sender["id"], amount_seconds),
+            )
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
     return {
         "success": True,
         "amount": amount_seconds,
         "wallet_part": wallet_part,
         "vault_part": vault_part,
-        "sender_wallet_remaining": new_wallet,
-        "sender_vault_remaining": new_vault,
+        "sender_wallet_remaining": wallet_balance - wallet_part,
+        "sender_vault_remaining": vault_balance - vault_part,
     }
 
 

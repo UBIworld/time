@@ -280,6 +280,8 @@ async def api_me(request: web.Request):
         "contacts": [{"handle": c["handle"], "source": c["source"]} for c in await contacts.list_contacts(user["telegram_id"])],
         "discoverable": bool(user.get("discoverable")),
         "has_username": bool(user.get("username")),
+        "pending_invites": len(await _pending_invites(user["id"])),
+        "federated_handle": f"{user['handle_display']}@{config.LOCAL_NODE_DOMAIN}",
     })
 
 
@@ -330,6 +332,190 @@ async def api_discoverable(request: web.Request):
         return _json({"ok": False, "error": "no_username"}, 400)
     await contacts.set_discoverable(user["telegram_id"], on)
     return _json({"ok": True, "discoverable": on})
+
+
+
+# ---------------------------------------------------------------------------
+# Circles (Universal + Community), history, handle
+# ---------------------------------------------------------------------------
+
+MAX_COMMUNITY_CIRCLES = 4
+
+
+async def _tg_notify(chat_id: int, text: str, buttons: list | None = None) -> None:
+    """Best-effort message through the Bot API. The web process has no aiogram Bot of its own."""
+    import aiohttp
+    payload = {"chat_id": chat_id, "text": text}
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": [buttons]}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as sess:
+            await sess.post(f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage", json=payload)
+    except Exception as e:
+        logger.warning("could not notify %s: %s", chat_id, e)
+
+
+async def _pending_invites(user_id: int) -> list[dict]:
+    import aiosqlite
+    async with aiosqlite.connect(config.DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT ci.id, cc.name AS circle_name FROM circle_invites ci "
+            "JOIN community_circles cc ON cc.id = ci.circle_id "
+            "WHERE ci.invitee_user_id = ? AND ci.status = 'pending' AND cc.dissolved = 0 ORDER BY ci.id",
+            (user_id,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+def _circle_view(c: dict) -> dict:
+    return {
+        "id": c["id"], "name": c["name"], "role": c["role"],
+        "balance": c["balance"], "balance_text": format_time(c["balance"]),
+        "members": c["member_count"],
+    }
+
+
+async def api_circles(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    universal = await db.get_circles_balances()
+    mine = await db.get_user_circles(user["telegram_id"])
+    invites = await _pending_invites(user["id"])
+    total = sum(c["total_seconds"] for c in universal)
+    return _json({
+        "ok": True,
+        "universal": [{"key": c["circle_key"], "name": c["display_name"], "seconds": c["total_seconds"],
+                       "text": format_time(c["total_seconds"])} for c in universal],
+        "universal_total_text": format_time(total),
+        "community": [_circle_view(c) for c in mine],
+        "invites": invites,
+        "limit": MAX_COMMUNITY_CIRCLES,
+        "available": user["daily_wallet"] + user["time_vault"],
+    })
+
+
+async def _my_circle(user: dict, circle_id) -> dict | None:
+    try:
+        cid = int(circle_id)
+    except (TypeError, ValueError):
+        return None
+    return next((c for c in await db.get_user_circles(user["telegram_id"]) if c["id"] == cid), None)
+
+
+async def api_circle_create(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    body = await read_json(request)
+    name = " ".join(str(body.get("name", "")).split())
+    if not name or len(name) > 64:
+        return _json({"ok": False, "error": "bad_name"}, 400)
+    if await db.get_circle_count(user["telegram_id"]) >= MAX_COMMUNITY_CIRCLES:
+        return _json({"ok": False, "error": "limit"}, 400)
+    circle = await db.create_circle(user["telegram_id"], name)
+    return _json({"ok": True, "id": circle["id"], "name": circle["name"]})
+
+
+async def api_circle_invite(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    if _lookup_limited(user["telegram_id"]):
+        return _json({"ok": False, "error": "slow_down"}, 429)
+    body = await read_json(request)
+    circle = await _my_circle(user, body.get("circle_id"))
+    if circle is None or circle["role"] != "creator":
+        return _json({"ok": False, "error": "not_creator"}, 403)
+    invitee = await db.get_user_by_handle(str(body.get("handle", "")).strip())
+    if invitee is None:
+        return _json({"ok": False, "error": "not_found"}, 404)
+    if invitee["id"] == user["id"]:
+        return _json({"ok": False, "error": "self"}, 400)
+    if await db.get_circle_count(invitee["telegram_id"]) >= MAX_COMMUNITY_CIRCLES:
+        return _json({"ok": False, "error": "invitee_full"}, 400)
+    try:
+        invite = await db.invite_to_circle(circle["id"], invitee["telegram_id"])
+    except ValueError as e:
+        return _json({"ok": False, "error": str(e)}, 400)
+    await _tg_notify(
+        invitee["telegram_id"],
+        f"🤗 {circle['name']} — you've been invited to join!\nInvited by: {user['handle_display']}",
+        [{"text": "Join", "callback_data": f"invite_accept_{invite['id']}"},
+         {"text": "Ignore", "callback_data": f"invite_ignore_{invite['id']}"}],
+    )
+    return _json({"ok": True, "handle": invitee["handle_display"]})
+
+
+async def api_invite_respond(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    body = await read_json(request)
+    try:
+        invite_id = int(body.get("invite_id"))
+    except (TypeError, ValueError):
+        return _json({"ok": False, "error": "bad_invite"}, 400)
+    info = await db.get_invite_with_circle(invite_id)
+    # Only the invited person may answer, and only while it is pending.
+    if info is None or info["invitee_user_id"] != user["id"] or info["status"] != "pending":
+        return _json({"ok": False, "error": "not_found"}, 404)
+    if body.get("accept"):
+        if await db.get_circle_count(user["telegram_id"]) >= MAX_COMMUNITY_CIRCLES:
+            return _json({"ok": False, "error": "limit"}, 400)
+        if not await db.accept_invite(invite_id, user["telegram_id"]):
+            return _json({"ok": False, "error": "not_found"}, 404)
+    else:
+        await db.ignore_invite(invite_id)
+    return _json({"ok": True})
+
+
+async def api_circle_fund(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    body = await read_json(request)
+    circle = await _my_circle(user, body.get("circle_id"))
+    if circle is None:
+        return _json({"ok": False, "error": "not_member"}, 403)
+    try:
+        amount = int(body.get("amount_seconds"))
+    except (TypeError, ValueError):
+        return _json({"ok": False, "error": "bad_amount"}, 400)
+    if amount < 60:
+        return _json({"ok": False, "error": "bad_amount"}, 400)
+    try:
+        r = await db.fund_circle(circle["id"], user["telegram_id"], amount)
+    except ValueError as e:
+        msg = str(e)
+        if msg.startswith("insufficient_balance"):
+            return _json({"ok": False, "error": "insufficient_balance", "available": int(msg.split(":")[1])}, 400)
+        return _json({"ok": False, "error": msg}, 400)
+    return _json({"ok": True, "amount_text": format_time(r["amount"]), "circle": circle["name"]})
+
+
+async def api_circle_dissolve(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    body = await read_json(request)
+    circle = await _my_circle(user, body.get("circle_id"))
+    if circle is None or circle["role"] != "creator":
+        return _json({"ok": False, "error": "not_creator"}, 403)
+    ok = await db.dissolve_circle(circle["id"], user["telegram_id"])
+    return _json({"ok": ok, "name": circle["name"]})
+
+
+async def api_history(request: web.Request):
+    user = await current_user(request)
+    if user is None:
+        return _json({"ok": False, "error": "not_logged_in"}, 401)
+    tx = await db.get_transaction_history(user["telegram_id"], 100)
+    return _json({"ok": True, "transactions": [
+        {"direction": "sent" if t["sender_tg_id"] == user["telegram_id"] else "received",
+         "other": t["recipient_handle"] if t["sender_tg_id"] == user["telegram_id"] else t["sender_handle"],
+         "amount_text": format_time(t["amount"]), "at": t["created_at"]} for t in tx]})
 
 
 async def api_coupon_create(request: web.Request):
@@ -441,6 +627,13 @@ def make_app() -> web.Application:
         web.get("/logout", logout),
         web.get("/api/me", api_me),
         web.post("/api/coupon", api_coupon_create),
+        web.get("/api/circles", api_circles),
+        web.post("/api/circles/create", api_circle_create),
+        web.post("/api/circles/invite", api_circle_invite),
+        web.post("/api/circles/respond", api_invite_respond),
+        web.post("/api/circles/fund", api_circle_fund),
+        web.post("/api/circles/dissolve", api_circle_dissolve),
+        web.get("/api/history", api_history),
         web.post("/api/contacts/find", api_contacts_find),
         web.post("/api/contacts/add", api_contacts_add),
         web.post("/api/contacts/remove", api_contacts_remove),
